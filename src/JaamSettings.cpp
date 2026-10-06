@@ -89,7 +89,7 @@ std::map<Type, SettingItemInt> intSettings = {
     {BRIGHTNESS, {"brightness", 50}},                      // Manual brightness
     {BRIGHTNESS_DAY, {"brd", 50}},                         // Auto: day brightness
     {BRIGHTNESS_NIGHT, {"brn", 10}},                       // Auto: night brightness
-    {BRIGHTNESS_MODE, {"bra", 0}},                         // 0 = manual, 1 = auto day/night, 2 = auto sensor
+    {BRIGHTNESS_MODE, {"bra", 0}},                         // 0 = manual, 1 = auto day/night, 2 = auto sensor, 3 = smooth auto (lux)
     
     // Home district settings
     {HOME_ALERT_TIME, {"hat", 0}},                         // Seconds delay before home alert
@@ -130,7 +130,6 @@ std::map<Type, SettingItemInt> intSettings = {
     
     // Environmental settings
     {NIGHT_MODE_LIGHT_THRESHOLD, {"nmlt", 10}},            // Light level for night mode (lux)
-    {BRIGHTNESS_SMOOTH, {"brsm", 0}},                      // [lux] Smooth sensor brightness instead of threshold (0/1)
     {BRIGHTNESS_SMOOTH_MAX, {"brsmx", 80}},                // [lux] Smooth mode: brightness in bright light (%)
     {BRIGHTNESS_SMOOTH_MIN_DAY, {"brsmd", 20}},            // [lux] Smooth mode: brightness in darkness, day hours (%)
     {BRIGHTNESS_SMOOTH_MIN_NIGHT, {"brsmn", 3}},           // [lux] Smooth mode: brightness in darkness, night hours (%)
@@ -453,7 +452,7 @@ bool JaamSettings::validateIntSetting(Type type, int value) {
         LOG.printf("[SETTINGS] Brightness value %d is out of range [0..100]\n", value);
         return false;
     }
-    if ((type == BRIGHTNESS_SMOOTH || type == DISPLAY_AUTO_BRIGHTNESS) && value != 0 && value != 1) {
+    if (type == DISPLAY_AUTO_BRIGHTNESS && value != 0 && value != 1) {
         LOG.printf("[SETTINGS] Bool value %d is invalid\n", value);
         return false;
     }

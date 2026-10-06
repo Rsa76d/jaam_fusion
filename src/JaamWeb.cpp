@@ -229,7 +229,6 @@ static const ParamMapping ALL_PARAM_MAPPINGS[] = {
     // Brightness
     {"brightness_mode", BRIGHTNESS_MODE, TYPE_INT},
     {"night_mode_light_threshold", NIGHT_MODE_LIGHT_THRESHOLD, TYPE_INT},
-    {"brightness_smooth", BRIGHTNESS_SMOOTH, TYPE_BOOL},                       // [lux]
     {"brightness_smooth_max", BRIGHTNESS_SMOOTH_MAX, TYPE_INT},                // [lux]
     {"brightness_smooth_min_day", BRIGHTNESS_SMOOTH_MIN_DAY, TYPE_INT},        // [lux]
     {"brightness_smooth_min_night", BRIGHTNESS_SMOOTH_MIN_NIGHT, TYPE_INT},    // [lux]

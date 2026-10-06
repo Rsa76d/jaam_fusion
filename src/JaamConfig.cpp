@@ -164,7 +164,8 @@ SettingListItem DISPLAY_MODES[DISPLAY_MODES_COUNT] = {
 SettingListItem AUTO_BRIGHTNESS_MODES[AUTO_BRIGHTNESS_OPTIONS_COUNT] = {
     {0, "Вимкнено"},
     {1, "День/Ніч"},
-    {2, "Сенсор освітлення"}
+    {2, "Сенсор освітлення"},
+    {3, "Автояскравість"}   // [lux] плавна яскравість від сенсора освітлення
 };
 
 const SettingListItem BG_LED_MODES[BG_LED_MODES_COUNT] = {

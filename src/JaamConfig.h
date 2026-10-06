@@ -363,7 +363,7 @@ extern const TimezoneInfo TIMEZONE_OFFSETS[TIMEZONES_COUNT];
 constexpr int DISPLAY_MODES_COUNT = 8;
 extern SettingListItem DISPLAY_MODES[DISPLAY_MODES_COUNT];
 
-constexpr int AUTO_BRIGHTNESS_OPTIONS_COUNT = 3;
+constexpr int AUTO_BRIGHTNESS_OPTIONS_COUNT = 4;
 extern SettingListItem AUTO_BRIGHTNESS_MODES[AUTO_BRIGHTNESS_OPTIONS_COUNT];
 
 constexpr int BG_LED_MODES_COUNT = 3;
@@ -652,8 +652,7 @@ enum Type {
     SOUND_ON_ALERT_LOW,
     MELODY_ON_ALERT_LOW,
     TRACK_ON_ALERT_LOW,
-    // [lux] Плавна яскравість мапи від сенсора освітлення (режим "Сенсор освітлення" + "Плавно")
-    BRIGHTNESS_SMOOTH,             // 0/1 - плавна яскравість замість порогу
+    // [lux] Три яскравості для режимів "Сенсор освітлення" (ступінчасто) і "Автояскравість" (плавно)
     BRIGHTNESS_SMOOTH_MAX,         // % - велика яскравість (яскраве освітлення)
     BRIGHTNESS_SMOOTH_MIN_DAY,     // % - мала яскравість вдень (темрява, денні години)
     BRIGHTNESS_SMOOTH_MIN_NIGHT,   // % - мала яскравість вночі (темрява, нічні години)

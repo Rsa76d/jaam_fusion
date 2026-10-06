@@ -517,8 +517,7 @@ void JaamApi::handleWebSocketMessage(WebsocketsClient& client, WebsocketsMessage
     else if (type == "set_brightness") {
         struct BrightnessKey { const char* key; Type setting; uint8_t kind; float minV; float maxV; }; // kind: 0 int, 1 bool, 2 float
         static const BrightnessKey keys[] = {
-            {"mode",                 BRIGHTNESS_MODE,             0, 0,    2},
-            {"smooth",               BRIGHTNESS_SMOOTH,           1, 0,    1},
+            {"mode",                 BRIGHTNESS_MODE,             0, 0,    3},
             {"max",                  BRIGHTNESS_SMOOTH_MAX,       0, 0,    100},
             {"min_day",              BRIGHTNESS_SMOOTH_MIN_DAY,   0, 0,    100},
             {"min_night",            BRIGHTNESS_SMOOTH_MIN_NIGHT, 0, 0,    100},
@@ -897,7 +896,6 @@ void JaamApi::onSettingsChange(Type type, int intValue, float fltValue, const ch
 
         // [lux] Налаштування яскравості мапи та дисплея
         case BRIGHTNESS_MODE:
-        case BRIGHTNESS_SMOOTH:
         case BRIGHTNESS_SMOOTH_MAX:
         case BRIGHTNESS_SMOOTH_MIN_DAY:
         case BRIGHTNESS_SMOOTH_MIN_NIGHT:
@@ -918,7 +916,6 @@ void JaamApi::onSettingsChange(Type type, int intValue, float fltValue, const ch
 void JaamApi::fillBrightnessState(JsonObject b) {
     if (!settings) return;
     b["mode"] = settings->getInt(BRIGHTNESS_MODE);
-    b["smooth"] = settings->getBool(BRIGHTNESS_SMOOTH);
     b["max"] = settings->getInt(BRIGHTNESS_SMOOTH_MAX);
     b["min_day"] = settings->getInt(BRIGHTNESS_SMOOTH_MIN_DAY);
     b["min_night"] = settings->getInt(BRIGHTNESS_SMOOTH_MIN_NIGHT);

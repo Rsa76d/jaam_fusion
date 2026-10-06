@@ -1348,19 +1348,8 @@ function renderControl(ctrl, lists) {
 function updateElementVisibility(element) {
     const visibility = element.getAttribute('data-visibility');
     if (!visibility) return;
-
-    // [lux] "A|B" - елемент видно, якщо виконується будь-яка з альтернатив (кожна - звичайний список умов)
-    const shouldShow = visibility.split('|').some(alt => isConditionSetSatisfied(alt));
-
-    if (shouldShow) {
-        element.classList.remove('hidden');
-    } else {
-        element.classList.add('hidden');
-    }
-}
-
-function isConditionSetSatisfied(visibility) {
-    const conditions = visibility.split(',').map(c => c.trim()).filter(c => c !== '');
+    
+    const conditions = visibility.split(',').map(c => c.trim());
     
     // Group conditions by field name and operator
     const conditionGroups = {};
@@ -1412,7 +1401,11 @@ function isConditionSetSatisfied(visibility) {
         }
     }
     
-    return shouldShow;
+    if (shouldShow) {
+        element.classList.remove('hidden');
+    } else {
+        element.classList.add('hidden');
+    }
 }
 
 function evaluateCondition(condition) {
