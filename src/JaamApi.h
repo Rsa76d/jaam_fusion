@@ -1,6 +1,7 @@
 #pragma once
 
 #include <ArduinoWebsockets.h>
+#include <ArduinoJson.h>
 #include <vector>
 #include "JaamSettings.h"
 
@@ -27,6 +28,8 @@ public:
     void setNightMode(bool state);
     void setMapEnabled(bool enabled);
     void setDisplayEnabled(bool enabled);
+    // [lux] Поточна яскравість мапи і дисплея (викликається кожні 0.5 с; broadcast не частіше 1 раз/с)
+    void setBrightnessState(int mapBrightness, int displayBrightness);
 
     // Broadcast button events to connected API (WebSocket) clients
     void broadcastButtonEvent(uint8_t buttonId, JaamApiButtonEventType eventType);
@@ -107,4 +110,12 @@ private:
     void broadcastDeviceNameChange(const char* deviceName);
     void broadcastHomeDistrictTempChange(int temp);
     void broadcastFirmwareUpdate(const char* version);
+    // [lux] Стан і налаштування яскравості
+    int currentMapBrightness = -1;
+    int currentDisplayBrightness = -1;
+    int sentMapBrightness = -2;
+    int sentDisplayBrightness = -2;
+    unsigned long lastBrightnessBroadcast = 0;
+    void fillBrightnessState(JsonObject obj);
+    void broadcastBrightnessChange();
 };

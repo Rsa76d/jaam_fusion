@@ -55,6 +55,10 @@ public:
     void drawIconWithText(JaamDisplayIcon icon, const String& text);
     void showServiceMessage(const String& message, const String& title = "", int duration = 2000);
     bool isServiceMessageActive();
+    // [lux] Яскравість (контраст) дисплея у відсотках 1..100. Працює для всіх підтримуваних контролерів
+    // (SSD1306/SH1106/SH1107 - команда 0x81 через U8g2). Значення запам'ятовується і повторно
+    // застосовується після (пере)ініціалізації дисплея.
+    void setBrightness(uint8_t percent);
 
 private:
     JaamDisplayType _type = JaamDisplayType::SSD1306;
@@ -66,6 +70,8 @@ private:
     U8G2* _u8g2 = nullptr;
 #endif
     long _serviceMessageEndTime = 0;
+    int16_t _brightnessPercent = -1; // [lux] -1 = не задано, лишається заводський контраст
+    void _applyBrightness();
 
     void _setupU8g2();
     bool _checkI2CConnection();

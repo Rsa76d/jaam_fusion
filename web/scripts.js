@@ -291,6 +291,53 @@ function updateParameter(name, value) {
         .catch(e => console.error('Network error:', e));
 }
 
+// [lux] Порядок яскравостей: [нижня, верхня]. Прошивка теж обмежує значення - тут лише миттєве відображення
+const BRIGHTNESS_ORDER = [
+    ['brightness_smooth_min_night', 'brightness_smooth_min_day'],
+    ['brightness_smooth_min_day', 'brightness_smooth_max'],
+    ['display_brightness_min', 'display_brightness'],
+];
+
+function setSliderUiValue(name, value) {
+    const rng = document.getElementById(name);
+    const inp = document.getElementById(name + 'Input');
+    if (rng) rng.value = value;
+    if (inp) inp.value = value;
+}
+
+function getSliderUiValue(name) {
+    const rng = document.getElementById(name);
+    return rng ? Number(rng.value) : NaN;
+}
+
+function applyBrightnessOrder(name, value) {
+    let v = Number(value);
+    if (!Number.isFinite(v)) return value;
+    // нижню не можна підняти вище верхньої
+    for (const [lower, upper] of BRIGHTNESS_ORDER) {
+        if (name !== lower) continue;
+        const up = getSliderUiValue(upper);
+        if (Number.isFinite(up) && v > up) {
+            v = up;
+            setSliderUiValue(name, v);
+        }
+    }
+    // верхню опустили нижче нижньої - нижні опускаються слідом (ланцюжком)
+    const changed = [[name, v]];
+    while (changed.length) {
+        const [n, val] = changed.pop();
+        for (const [lower, upper] of BRIGHTNESS_ORDER) {
+            if (upper !== n) continue;
+            const lo = getSliderUiValue(lower);
+            if (Number.isFinite(lo) && lo > val) {
+                setSliderUiValue(lower, val);
+                changed.push([lower, val]);
+            }
+        }
+    }
+    return v;
+}
+
 function updateSliderValue(name, value) {
     const inputElement = document.getElementById(name + 'Input');
     if (inputElement) {
@@ -1177,11 +1224,11 @@ function renderControl(ctrl, lists) {
             const clamped = Number.isFinite(val) ? Math.min(maxNum, Math.max(minNum, val)) : Number(rng.value);
             inp.value = clamped;
             rng.value = clamped;
-            updateParameter(name, clamped);
+            updateParameter(name, applyBrightnessOrder(name, clamped)); // [lux]
         };
 
         rng.oninput = (e) => updateSliderValue(name, e.target.value);
-        rng.onchange = (e) => updateParameter(name, e.target.value);
+        rng.onchange = (e) => updateParameter(name, applyBrightnessOrder(name, e.target.value)); // [lux]
 
         const row = document.createElement('div');
         row.className = 'slider-row';
@@ -1301,8 +1348,19 @@ function renderControl(ctrl, lists) {
 function updateElementVisibility(element) {
     const visibility = element.getAttribute('data-visibility');
     if (!visibility) return;
-    
-    const conditions = visibility.split(',').map(c => c.trim());
+
+    // [lux] "A|B" - елемент видно, якщо виконується будь-яка з альтернатив (кожна - звичайний список умов)
+    const shouldShow = visibility.split('|').some(alt => isConditionSetSatisfied(alt));
+
+    if (shouldShow) {
+        element.classList.remove('hidden');
+    } else {
+        element.classList.add('hidden');
+    }
+}
+
+function isConditionSetSatisfied(visibility) {
+    const conditions = visibility.split(',').map(c => c.trim()).filter(c => c !== '');
     
     // Group conditions by field name and operator
     const conditionGroups = {};
@@ -1354,11 +1412,7 @@ function updateElementVisibility(element) {
         }
     }
     
-    if (shouldShow) {
-        element.classList.remove('hidden');
-    } else {
-        element.classList.add('hidden');
-    }
+    return shouldShow;
 }
 
 function evaluateCondition(condition) {

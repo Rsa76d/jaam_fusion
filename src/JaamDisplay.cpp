@@ -99,7 +99,7 @@ JaamDisplay::~JaamDisplay() {
 }
 
 JaamDisplay::JaamDisplay(JaamDisplay&& other) noexcept
-    : _type(other._type), _height(other._height), _isConnected(other._isConnected), _i2cAddress(other._i2cAddress), _serviceMessageEndTime(other._serviceMessageEndTime)
+    : _type(other._type), _height(other._height), _isConnected(other._isConnected), _i2cAddress(other._i2cAddress), _serviceMessageEndTime(other._serviceMessageEndTime), _brightnessPercent(other._brightnessPercent)
 #if DISPLAY_ENABLED
     , _u8g2(other._u8g2)
 #endif
@@ -126,6 +126,7 @@ JaamDisplay& JaamDisplay::operator=(JaamDisplay&& other) noexcept {
         _isConnected = other._isConnected;
         _i2cAddress = other._i2cAddress;
         _serviceMessageEndTime = other._serviceMessageEndTime;
+        _brightnessPercent = other._brightnessPercent; // [lux]
         _u8g2 = other._u8g2;
         
         // Reset other
@@ -139,6 +140,7 @@ JaamDisplay& JaamDisplay::operator=(JaamDisplay&& other) noexcept {
         _isConnected = other._isConnected;
         _i2cAddress = other._i2cAddress;
         _serviceMessageEndTime = other._serviceMessageEndTime;
+        _brightnessPercent = other._brightnessPercent; // [lux]
         other._isConnected = false;
         other._i2cAddress = 0x3C;
         other._serviceMessageEndTime = 0;
@@ -176,12 +178,35 @@ void JaamDisplay::begin(JaamDisplayType type, JaamDisplayHeight height) {
         _u8g2->begin();
         _u8g2->enableUTF8Print(); // Enable UTF-8 support for printing
         _isConnected = true;
+        _applyBrightness(); // [lux] begin() скидає контраст на заводський - відновлюємо заданий
         LOG.printf("[DISPLAY] Display successfully initialized at 0x%02X\n", _i2cAddress);
     } else {
         LOG.printf("[DISPLAY] Failed to initialize U8G2 object\n");
     }
 #else
     LOG.printf("[DISPLAY] Display support is disabled (DISPLAY_ENABLED=0)\n");
+#endif
+}
+
+// [lux] Яскравість дисплея
+void JaamDisplay::setBrightness(uint8_t percent) {
+    if (percent > 100) percent = 100;
+    if (percent < 1) percent = 1;
+    if (_brightnessPercent == percent) return;
+    _brightnessPercent = percent;
+    _applyBrightness();
+}
+
+void JaamDisplay::_applyBrightness() {
+    if (!_isConnected || _brightnessPercent < 0) return;
+#if DISPLAY_ENABLED
+    if (_u8g2) {
+        // OLED-контраст керує струмом пікселів; око сприймає яскравість нелінійно,
+        // тому відсотки переводимо квадратично: 100% -> 255, 50% -> 64, 10% -> 3, 1% -> 1
+        float p = _brightnessPercent / 100.0f;
+        uint8_t contrast = (uint8_t)constrain(lroundf(p * p * 255.0f), 1L, 255L);
+        _u8g2->setContrast(contrast);
+    }
 #endif
 }
 

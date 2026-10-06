@@ -347,6 +347,9 @@ void JaamApi::sendInitialState(WebsocketsClient& client) {
     doc["map_enabled"] = mapEnabled;
     doc["display_enabled"] = displayEnabled;
 
+    // [lux] Налаштування і поточний стан яскравості мапи та дисплея
+    fillBrightnessState(doc["brightness"].to<JsonObject>());
+
     // Список підтримуваних режимів мапи
     JsonArray supportedMapModes = doc["supported_map_modes"].to<JsonArray>();
     for (int i = 0; i < MAP_MODES_COUNT; i++) {
@@ -504,6 +507,48 @@ void JaamApi::handleWebSocketMessage(WebsocketsClient& client, WebsocketsMessage
             bool enabled = doc["enabled"].as<bool>();
             saveDisplayOff(!enabled, true);
             LOG.printf("[API] Display enabled changed to: %s\n", enabled ? "enabled" : "disabled");
+        }
+    }
+    // [lux] {"type":"set_brightness","key":"<ключ>","value":<значення>} - налаштування яскравості мапи та дисплея
+    else if (type == "set_brightness") {
+        struct BrightnessKey { const char* key; Type setting; uint8_t kind; float minV; float maxV; }; // kind: 0 int, 1 bool, 2 float
+        static const BrightnessKey keys[] = {
+            {"mode",                 BRIGHTNESS_MODE,             0, 0,    2},
+            {"smooth",               BRIGHTNESS_SMOOTH,           1, 0,    1},
+            {"max",                  BRIGHTNESS_SMOOTH_MAX,       0, 0,    100},
+            {"min_day",              BRIGHTNESS_SMOOTH_MIN_DAY,   0, 0,    100},
+            {"min_night",            BRIGHTNESS_SMOOTH_MIN_NIGHT, 0, 0,    100},
+            {"sensitivity",          LIGHT_SENSOR_FACTOR,         2, 0.1f, 30},
+            {"display",              DISPLAY_BRIGHTNESS,          0, 1,    100},
+            {"display_auto",         DISPLAY_AUTO_BRIGHTNESS,     1, 0,    1},
+            {"display_min",          DISPLAY_BRIGHTNESS_MIN,      0, 1,    100},
+            {"display_off_at_night", DISPLAY_OFF_AT_NIGHT,        1, 0,    1},
+        };
+        String key = doc["key"].isNull() ? String("") : doc["key"].as<String>();
+        if (doc["value"].isNull()) {
+            LOG.printf("[API] set_brightness: missing value for '%s'\n", key.c_str());
+            return;
+        }
+        bool found = false;
+        for (const auto& k : keys) {
+            if (key != k.key) continue;
+            found = true;
+            if (k.kind == 1) {
+                settings->saveBool(k.setting, doc["value"].as<bool>());
+            } else if (k.kind == 2) {
+                float v = doc["value"].as<float>();
+                if (isnan(v)) break;
+                settings->saveFloat(k.setting, constrain(v, k.minV, k.maxV));
+            } else {
+                float v = doc["value"].as<float>();
+                if (isnan(v)) break;
+                settings->saveInt(k.setting, (int)constrain(lroundf(v), (long)k.minV, (long)k.maxV));
+            }
+            LOG.printf("[API] set_brightness: %s updated\n", k.key);
+            break;
+        }
+        if (!found) {
+            LOG.printf("[API] set_brightness: unknown key '%s'\n", key.c_str());
         }
     }
     else {
@@ -845,8 +890,65 @@ void JaamApi::onSettingsChange(Type type, int intValue, float fltValue, const ch
                 broadcastDeviceNameChange(strValue);
             }
             break;
+
+        // [lux] Налаштування яскравості мапи та дисплея
+        case BRIGHTNESS_MODE:
+        case BRIGHTNESS_SMOOTH:
+        case BRIGHTNESS_SMOOTH_MAX:
+        case BRIGHTNESS_SMOOTH_MIN_DAY:
+        case BRIGHTNESS_SMOOTH_MIN_NIGHT:
+        case LIGHT_SENSOR_FACTOR:
+        case DISPLAY_BRIGHTNESS:
+        case DISPLAY_AUTO_BRIGHTNESS:
+        case DISPLAY_BRIGHTNESS_MIN:
+        case DISPLAY_OFF_AT_NIGHT:
+            broadcastBrightnessChange();
+            break;
             
         default:
             break;
+    }
+}
+
+// [lux] ===== Яскравість =====
+void JaamApi::fillBrightnessState(JsonObject b) {
+    if (!settings) return;
+    b["mode"] = settings->getInt(BRIGHTNESS_MODE);
+    b["smooth"] = settings->getBool(BRIGHTNESS_SMOOTH);
+    b["max"] = settings->getInt(BRIGHTNESS_SMOOTH_MAX);
+    b["min_day"] = settings->getInt(BRIGHTNESS_SMOOTH_MIN_DAY);
+    b["min_night"] = settings->getInt(BRIGHTNESS_SMOOTH_MIN_NIGHT);
+    b["sensitivity"] = roundf(settings->getFloat(LIGHT_SENSOR_FACTOR) * 10.0f) / 10.0f;
+    b["current"] = currentMapBrightness >= 0 ? currentMapBrightness : settings->getInt(CURRENT_BRIGHTNESS);
+    b["display"] = settings->getInt(DISPLAY_BRIGHTNESS);
+    b["display_auto"] = settings->getBool(DISPLAY_AUTO_BRIGHTNESS);
+    b["display_min"] = settings->getInt(DISPLAY_BRIGHTNESS_MIN);
+    b["display_off_at_night"] = settings->getBool(DISPLAY_OFF_AT_NIGHT);
+    b["display_current"] = currentDisplayBrightness >= 0 ? currentDisplayBrightness : settings->getInt(DISPLAY_BRIGHTNESS);
+    b["sensor"] = sensorLightAvailable;
+}
+
+void JaamApi::broadcastBrightnessChange() {
+    if (!isRunning || !settings) return;
+    JsonDocument doc;
+    doc["type"] = "brightness_change";
+    fillBrightnessState(doc["brightness"].to<JsonObject>());
+    String data;
+    serializeJson(doc, data);
+    broadcastWebSocket(data);
+    sentMapBrightness = currentMapBrightness;
+    sentDisplayBrightness = currentDisplayBrightness;
+    lastBrightnessBroadcast = millis();
+}
+
+void JaamApi::setBrightnessState(int mapBrightness, int displayBrightness) {
+    currentMapBrightness = mapBrightness;
+    currentDisplayBrightness = displayBrightness;
+    if (!isRunning || !settings) return;
+    // Під час плавної зміни значення міняються кожні 0.5 с - шлемо не частіше 1 раз/с,
+    // а фінальне значення гарантовано піде наступним викликом
+    if ((mapBrightness != sentMapBrightness || displayBrightness != sentDisplayBrightness) &&
+        millis() - lastBrightnessBroadcast >= 1000) {
+        broadcastBrightnessChange();
     }
 }

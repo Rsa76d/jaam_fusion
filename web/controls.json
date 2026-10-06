@@ -314,6 +314,43 @@
             ""
         ],
         [
+            "slider",
+            "display_brightness",
+            "Яскравість дисплея",
+            1,
+            100,
+            1,
+            "display",
+            "%",
+            ""
+        ],
+        [
+            "bool",
+            "display_auto_brightness",
+            "Автояскравість дисплея (від сенсора освітлення)",
+            "display",
+            ""
+        ],
+        [
+            "info",
+            "Сенсор освітлення плавно змінює яскравість дисплея від \"Мінімальної\" (темрява) до \"Яскравості дисплея\" (яскраве освітлення). Чутливість сенсора спільна з мапою (розділ \"Яскравість\").\nOLED-дисплей навіть на мінімумі не згасає повністю - для цього є \"Вимикати дисплей вночі\"",
+            "#2196F3",
+            "M13,9H11V7H13M13,17H11V11H13M12,2A10,10 0 0,0 2,12A10,10 0 0,0 22,12A10,10 0 0,0 12,2Z",
+            "display",
+            "display_auto_brightness==1"
+        ],
+        [
+            "slider",
+            "display_brightness_min",
+            "Мінімальна яскравість дисплея",
+            1,
+            100,
+            1,
+            "display",
+            "%",
+            "display_auto_brightness==1"
+        ],
+        [
             "dropdown",
             "clock_font",
             "Шрифт годинника",
@@ -1642,6 +1679,13 @@
             "brightness_mode==2"
         ],
         [
+            "bool",
+            "brightness_smooth",
+            "Плавно (яскравість залежить від рівня освітлення)",
+            "brightness",
+            "brightness_mode==2"
+        ],
+        [
             "slider",
             "night_mode_light_threshold",
             "Рівень освітлення для застосування \"нічної\" яскравості",
@@ -1650,7 +1694,59 @@
             5,
             "brightness",
             "lx",
-            "brightness_mode==2"
+            "brightness_mode==2,brightness_smooth==0"
+        ],
+        [
+            "info",
+            "Яскравість плавно змінюється від \"Малої\" (темрява) до \"Великої\" (яскраве освітлення). \"Мала\" береться денна або нічна залежно від годин \"Дня\" та \"Ночі\" з розділу \"Загальні\".\nПорядок завжди зберігається: Мала ніч ≤ Мала день ≤ Велика. Чутливість: що більша, то менше світла потрібно для \"Великої\" яскравості (1.0 ≈ 300 lx)",
+            "#2196F3",
+            "M13,9H11V7H13M13,17H11V11H13M12,2A10,10 0 0,0 2,12A10,10 0 0,0 22,12A10,10 0 0,0 12,2Z",
+            "brightness",
+            "brightness_mode==2,brightness_smooth==1"
+        ],
+        [
+            "slider",
+            "brightness_smooth_max",
+            "Велика яскравість",
+            0,
+            100,
+            1,
+            "brightness",
+            "%",
+            "brightness_mode==2,brightness_smooth==1"
+        ],
+        [
+            "slider",
+            "brightness_smooth_min_day",
+            "Мала яскравість день",
+            0,
+            100,
+            1,
+            "brightness",
+            "%",
+            "brightness_mode==2,brightness_smooth==1"
+        ],
+        [
+            "slider",
+            "brightness_smooth_min_night",
+            "Мала яскравість ніч",
+            0,
+            100,
+            1,
+            "brightness",
+            "%",
+            "brightness_mode==2,brightness_smooth==1"
+        ],
+        [
+            "slider",
+            "light_sensor_factor",
+            "Чутливість сенсора",
+            0.1,
+            30,
+            0.1,
+            "brightness",
+            "×",
+            "brightness_mode==2,brightness_smooth==1"
         ],
         [
             "slider",
@@ -1672,7 +1768,7 @@
             1,
             "brightness",
             "%",
-            "brightness_mode!=0"
+            "brightness_mode==1|brightness_mode==2,brightness_smooth==0"
         ],
         [
             "slider",
@@ -1683,7 +1779,7 @@
             1,
             "brightness",
             "%",
-            "brightness_mode!=0"
+            "brightness_mode==1|brightness_mode==2,brightness_smooth==0"
         ],
         [
             "slider",
