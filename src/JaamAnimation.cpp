@@ -1205,7 +1205,7 @@ uint32_t AnimationManager::stripActualColor(Adafruit_NeoPixel* strip, bool adapt
                         break;
                     case MapModes::LAMP:
                         color = colorFromHex(settings->getString(COLOR_LAMP));
-                        brightness = led.brightnessRelative(settings->getInt(BRIGHTNESS_LAMP));
+                        brightness = led.lampBrightness(); // [lux] лампа не залежить від налаштувань яскравості мапи
                         break;
                 }
             }
@@ -1403,7 +1403,7 @@ uint32_t AnimationManager::ledActualColor(Adafruit_NeoPixel* strip, uint16_t pos
                 }
                 case MapModes::LAMP: {
                     color = colorFromHex(settings->getString(COLOR_LAMP));
-                    brightness = led.brightnessRelative(settings->getInt(BRIGHTNESS_LAMP));
+                    brightness = led.lampBrightness(); // [lux] лампа не залежить від налаштувань яскравості мапи
                     break;
                 }
                 case MapModes::RANDOM_COLORS: {
@@ -1486,7 +1486,7 @@ uint32_t AnimationManager::ledActualColor(Adafruit_NeoPixel* strip, uint16_t pos
                         break;
                     case MapModes::LAMP:
                         color = colorFromHex(settings->getString(COLOR_LAMP));
-                        brightness = led.brightnessRelative(settings->getInt(BRIGHTNESS_LAMP));
+                        brightness = led.lampBrightness(); // [lux] лампа не залежить від налаштувань яскравості мапи
                         break;
                 }
             }
