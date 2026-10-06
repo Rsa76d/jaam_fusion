@@ -17,10 +17,14 @@ uint8_t JaamLed::brightnessRelative(uint8_t percentLocal) {
     return brightnessMapped(combinedPercent);
 }
 
-// [lux] Лампа світить як лампа: її яскравість задає лише власний повзунок. Загальна яскравість мапи
-// (день/ніч, сенсор освітлення, автояскравість) її не змінює - інакше в темній кімнаті лампа б майже гасла.
+// [lux] Лампа світить як лампа. У режимах яскравості 2 ("Сенсор освітлення") і 3 ("Автояскравість") загальна
+// яскравість мапи залежить від освітлення, і в темній кімнаті лампа майже гасла б, тому її яскравість задає лише
+// власний повзунок. У режимах 0 і 1 поведінка офіційна: лампа відносна до загальної яскравості.
 uint8_t JaamLed::lampBrightness() {
-    return brightnessMapped(settings.getInt(BRIGHTNESS_LAMP));
+    uint8_t percent = settings.getInt(BRIGHTNESS_LAMP);
+    int mode = settings.getInt(BRIGHTNESS_MODE);
+    if (mode == 2 || mode == 3) return brightnessMapped(percent);
+    return brightnessRelative(percent);
 }
 
 uint8_t JaamLed::homeDistrictBrightness(uint8_t baseBrightness) {
