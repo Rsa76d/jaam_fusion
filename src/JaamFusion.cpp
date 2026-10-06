@@ -3674,7 +3674,10 @@ void displayProcess()
     }
 
     // Turn off display at night if setting enabled (Priority - highest)
-    if (settings.getBool(DISPLAY_OFF_AT_NIGHT) && isItNightNow() && !display.isServiceMessageActive()) {
+    // [lux] Режим мапи "Лампа" вмикає дисплей, вимкнений вночі за часом; після виходу з режиму лампи
+    // умова знову виконується, і дисплей гаситься сам. Ручне вимкнення дисплея (isDisplayOff) лампа не чіпає
+    bool lampKeepsDisplayOn = getCurrentMapMode() == MapModes::LAMP;
+    if (settings.getBool(DISPLAY_OFF_AT_NIGHT) && isItNightNow() && !lampKeepsDisplayOn && !display.isServiceMessageActive()) {
         display.clear();
         return;
     }
