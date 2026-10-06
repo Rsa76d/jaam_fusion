@@ -207,13 +207,11 @@ void JaamDisplay::_applyBrightness() {
     if (!_isConnected || _brightnessPercent < 0) return;
 #if DISPLAY_ENABLED
     if (_u8g2) {
-        // OLED-контраст керує струмом пікселів. Верхня межа - як у прошивках 4.x (SSD1306 0xCF,
-        // SH1106/SH1107 0x7F): вище неї яскравість майже не росте, а повзунок втрачав би діапазон.
-        // Око сприймає яскравість нелінійно, тому відсотки переводимо степенем 1.5:
-        // 100% -> max, 50% -> 35%·max, 10% -> 3%·max, мінімум - 1
-        const float maxContrast = (_type == JaamDisplayType::SSD1306) ? 207.0f : 127.0f;
+        // OLED-контраст керує струмом пікселів; 100% = повний контраст 255 (максимальна яскравість).
+        // Око сприймає яскравість нелінійно, тому відсотки переводимо квадратично:
+        // 100% -> 255, 70% -> 125, 50% -> 64, 10% -> 3, 1% -> 1
         float p = _brightnessPercent / 100.0f;
-        uint8_t contrast = (uint8_t)constrain(lroundf(powf(p, 1.5f) * maxContrast), 1L, (long)maxContrast);
+        uint8_t contrast = (uint8_t)constrain(lroundf(p * p * 255.0f), 1L, 255L);
         _u8g2->setContrast(contrast);
     }
 #endif
