@@ -350,6 +350,10 @@ void JaamApi::sendInitialState(WebsocketsClient& client) {
     // [lux] Налаштування і поточний стан яскравості мапи та дисплея
     fillBrightnessState(doc["brightness"].to<JsonObject>());
 
+    // [lux3] Енергосистема і радіація домашнього регіону (0 - немає даних)
+    doc["home_energy"] = homeEnergyStatus;
+    doc["home_radiation"] = homeRadiation;
+
     // Список підтримуваних режимів мапи
     JsonArray supportedMapModes = doc["supported_map_modes"].to<JsonArray>();
     for (int i = 0; i < MAP_MODES_COUNT; i++) {
@@ -939,6 +943,20 @@ void JaamApi::broadcastBrightnessChange() {
     sentMapBrightness = currentMapBrightness;
     sentDisplayBrightness = currentDisplayBrightness;
     lastBrightnessBroadcast = millis();
+}
+
+void JaamApi::setHomeEnergyRadiation(uint8_t energyStatus, uint16_t radiation) {
+    bool changed = energyStatus != homeEnergyStatus || radiation != homeRadiation;
+    homeEnergyStatus = energyStatus;
+    homeRadiation = radiation;
+    if (!changed || !isRunning) return;
+    JsonDocument doc;
+    doc["type"] = "home_energy_radiation_change";
+    doc["home_energy"] = homeEnergyStatus;
+    doc["home_radiation"] = homeRadiation;
+    String data;
+    serializeJson(doc, data);
+    broadcastWebSocket(data);
 }
 
 void JaamApi::setBrightnessState(int mapBrightness, int displayBrightness) {

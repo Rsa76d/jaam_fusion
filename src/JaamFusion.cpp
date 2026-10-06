@@ -70,6 +70,7 @@ void requestRebootDevice();
 void requestToRegenerateBgColorMap();
 void displayProcess();
 void brightnessProcess();
+void updateHomeEnergyRadiation();                     // [lux3]
 void displayBrightnessProcess();                       // [lux]
 void enforceBrightnessOrder(Type type);                // [lux]
 void rebuildSensorsListItems();
@@ -1421,6 +1422,7 @@ void onMessageCallback(WebsocketsMessage msg) {
         }
 
         adaptStripColorsAndBrightness();
+        updateHomeEnergyRadiation(); // [lux3]
     }
 
     if(type == TYPE_RADIATION_BATCH) {
@@ -1451,6 +1453,7 @@ void onMessageCallback(WebsocketsMessage msg) {
         }
 
         adaptStripColorsAndBrightness();
+        updateHomeEnergyRadiation(); // [lux3]
     }
 
     checkFreeHeap("Websockets data processing");
@@ -3343,6 +3346,14 @@ void handleUpdateHomeAlertBit() {
                           ? temperatureFlat[homeTempIdx] : 0x00;
     int homeTemp = decodeTemperature(encodedTemp);
     api.setHomeDistrictTemp(homeTemp);
+    updateHomeEnergyRadiation(); // [lux3]
+}
+
+// [lux3] Стан енергосистеми і рівень радіації домашнього регіону -> Home Assistant
+void updateHomeEnergyRadiation() {
+    int idx = getRegionFlatIdx(settings.getInt(HOME_DISTRICT));
+    bool valid = idx >= 0 && idx < (int)(MAX_REGIONS + 1);
+    api.setHomeEnergyRadiation(valid ? energyFlat[idx] : 0, valid ? radiationFlat[idx] : 0);
 }
 
 void handleUpdateTimezone() {
