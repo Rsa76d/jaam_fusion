@@ -313,6 +313,7 @@ std::map<Type, SettingItemInt> intSettings = {
     
     // Lamp mode
     {BRIGHTNESS_LAMP, {"blamp", 50}},                      // Lamp mode brightness (0-100%)
+    {BIND_LAMP_BRIGHTNESS, {"blb", 1}},                    // [lux] Bind lamp brightness to global brightness (0/1)
     
     // API settings
     {API_ENABLED, {"apie", 0}},                            // Enable HTTP API (0/1)

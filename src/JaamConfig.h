@@ -637,6 +637,7 @@ enum Type {
     TRACK_ON_RECON_DRONES,
     COLOR_LAMP,
     BRIGHTNESS_LAMP,
+    BIND_LAMP_BRIGHTNESS, // [lux] прив'язати яскравість лампи до загальної яскравості мапи
     API_ENABLED,
     API_PORT,
     BRIGHTNESS_MAX,

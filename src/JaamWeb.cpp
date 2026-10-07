@@ -252,6 +252,7 @@ static const ParamMapping ALL_PARAM_MAPPINGS[] = {
     {"brightness_bg", BRIGHTNESS_BG, TYPE_INT},
     {"bind_bg_brightness", BIND_BG_BRIGHTNESS, TYPE_BOOL},
     {"brightness_lamp", BRIGHTNESS_LAMP, TYPE_INT},
+    {"bind_lamp_brightness", BIND_LAMP_BRIGHTNESS, TYPE_BOOL},
     {"brightness_service", BRIGHTNESS_SERVICE, TYPE_INT},
     {"brightness_animation_end", BRIGHTNESS_ANIMATION_END, TYPE_INT},
     

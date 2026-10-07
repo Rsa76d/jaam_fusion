@@ -1921,6 +1921,13 @@
             ""
         ],
         [
+            "bool",
+            "bind_lamp_brightness",
+            "Прив'язати яскравість лампи до загальної яскравості",
+            "brightness",
+            ""
+        ],
+        [
             "slider",
             "brightness_service",
             "Сервісні діоди",

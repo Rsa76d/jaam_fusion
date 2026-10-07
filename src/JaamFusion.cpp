@@ -2347,6 +2347,7 @@ void initSettings() {
             case BIND_BG_BRIGHTNESS:
             case BRIGHTNESS_ANIMATION_END:
             case BRIGHTNESS_LAMP:
+            case BIND_LAMP_BRIGHTNESS:
             case BRIGHTNESS_SERVICE:
                 adaptStripColorsAndBrightness();
                 handleAdaptAnimationColors();
