@@ -1,3 +1,19 @@
+> ## 💡 Цей форк: доопрацьована яскравість (версія 5.1.2-b3-lux8)
+>
+> Це **не офіційна версія**, а форк JAAM Fusion із доопрацьованою яскравістю:
+> - 🌗 **Автояскравість**: мапа плавно змінює яскравість за датчиком світла. Покращений режим «Сенсор освітлення» з трьома повзунками (Велика, Мала день, Мала ніч) і чутливістю.
+> - 🖥️ **Яскравість дисплея**: окремий повзунок, автояскравість, виправлення для SH1106 (яскравість знову регулюється на весь діапазон).
+> - 💡 **Режим «Лампа»**: власна яскравість (перемикач прив'язки до загальної), вмикає екран, вимкнений вночі за часом.
+> - 🏠 **Керування з Home Assistant** (разом з [jaam_ha](https://github.com/Rsa76d/jaam_ha/tree/lux5-brightness)).
+>
+> 📥 **Готові прошивки** (ESP32 і ESP32-C3) та інструкція: [гілка `lux-firmware`](https://github.com/Rsa76d/jaam_fusion/tree/lux-firmware/firmware-lux8)
+> 🔧 **Код змін:** [гілка `lux8-brightness`](https://github.com/Rsa76d/jaam_fusion/tree/lux8-brightness)
+> 💬 **Обговорення з розробниками:** [Issue #101](https://github.com/J-A-A-M/jaam_fusion/issues/101)
+>
+> Перевірено на ESP32 і ESP32-C3 з дисплеєм SH1106 і датчиком BH1750. Дисплеї SSD1306 та SH1107 не перевірені.
+
+---
+
 [![Stand With Ukraine](https://github.com/vshymanskyy/StandWithUkraine/blob/main/badges/StandWithUkraine.svg)](http://stand-with-ukraine.pp.ua/)
 [![Russian Warship](https://github.com/vshymanskyy/StandWithUkraine/blob/main/badges/RussianWarship.svg)](http://stand-with-ukraine.pp.ua/)
 
