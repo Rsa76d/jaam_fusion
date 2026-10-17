@@ -1,5 +1,5 @@
 {
-  "version": "5.1.2-b3-lux9",
-  "esp32": "https://raw.githubusercontent.com/Rsa76d/jaam_fusion/lux-firmware/firmware-lux9/JAAM_5.1.2-b3-lux9.bin",
-  "c3": "https://raw.githubusercontent.com/Rsa76d/jaam_fusion/lux-firmware/firmware-lux9/JAAM_c3_5.1.2-b3-lux9.bin"
+  "version": "5.1.2-b3-lux10",
+  "esp32": "https://raw.githubusercontent.com/Rsa76d/jaam_fusion/lux-firmware/firmware-lux10/JAAM_5.1.2-b3-lux10.bin",
+  "c3": "https://raw.githubusercontent.com/Rsa76d/jaam_fusion/lux-firmware/firmware-lux10/JAAM_c3_5.1.2-b3-lux10.bin"
 }
