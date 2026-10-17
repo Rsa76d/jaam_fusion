@@ -2229,7 +2229,7 @@ void initSettings() {
     LOG.printf("[INIT] Init settings\n");
     settings.init();
     fwUpdate.init(VERSION);
-    fwUpdate.applyActiveChannel(settings.getInt(FW_UPDATE_CHANNEL) == 1);
+    fwUpdate.applyActiveChannel(settings.getInt(FW_UPDATE_CHANNEL));
     
     // Перевіряємо чи є збережене значення hostname
     if (!settings.hasKey(BROADCAST_NAME)) {
@@ -2536,7 +2536,7 @@ void initSettings() {
             // Зміна каналу оновлення прошивки — перераховуємо стан з уже отриманих списків
             case NEW_FW_NOTIFICATION:
             case FW_UPDATE_CHANNEL:
-                fwUpdate.applyActiveChannel(settings.getInt(FW_UPDATE_CHANNEL) == 1);
+                fwUpdate.applyActiveChannel(settings.getInt(FW_UPDATE_CHANNEL));
                 break;
 
             default:
@@ -3051,6 +3051,7 @@ void websocketProcess() {
         LOG.printf("[WEBSOCKET] Reconnecting... WiFi not connected\n");
         return;
     }
+    fwUpdate.processCustomChannel(true);  // [rsa_lux] перевірка маніфесту неофіційного каналу
     //if (millis() - websocketLastPingTime > 30000 && !websocketReconnect) {
     if (millis() - websocketLastPingTime > settings.getInt(WS_ALERT_TIME) && !websocketReconnect) {
         LOG.printf("[WEBSOCKET] websocketReconnect = true; Reason: no ping/pong from server (WS_ALERT_TIME)\n");
@@ -3311,7 +3312,7 @@ void reconfigureAll() {
     handleUpdateHomeAlertBit();
     
     // Оновлення каналу прошивки
-    fwUpdate.applyActiveChannel(settings.getInt(FW_UPDATE_CHANNEL) == 1);
+    fwUpdate.applyActiveChannel(settings.getInt(FW_UPDATE_CHANNEL));
     
     // Оновлення режиму логування
     loggingStream.setLogsEnabled(settings.getBool(LOGS_ENABLED));
@@ -3436,8 +3437,8 @@ void requestFirmwareUpdate(const char* firmwareId) {
     }
     
     // Встановлюємо ID прошивки для завантаження
-    bool isBeta = settings.getInt(FW_UPDATE_CHANNEL) == 1;
-    if (!fwUpdate.requestUpdate(versionToUse, isBeta)) {
+    int channel = settings.getInt(FW_UPDATE_CHANNEL);
+    if (!fwUpdate.requestUpdate(versionToUse, channel)) {
         LOG.printf("[FIRMWARE] Invalid firmware ID: %s\n", versionToUse);
         return;
     }

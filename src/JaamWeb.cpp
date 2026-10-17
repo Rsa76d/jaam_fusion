@@ -1835,6 +1835,18 @@ void JaamWeb::buildUiSchemaDropdownLists(JsonDocument& doc) {
         JsonArray arr = dropdownLists["fw_update_channel_options"].to<JsonArray>();
         JsonArray opt0 = arr.add<JsonArray>(); opt0.add(0); opt0.add("Prod"); opt0.add(0);
         JsonArray opt1 = arr.add<JsonArray>(); opt1.add(1); opt1.add("Beta"); opt1.add(0);
+        JsonArray opt2 = arr.add<JsonArray>(); opt2.add(2); opt2.add("rsa_lux"); opt2.add(0);
+    }
+    {
+        // [rsa_lux] Неофіційний канал: єдина версія з маніфесту (порожньо, поки маніфест не отримано)
+        JsonArray arr = dropdownLists["firmware_versions_rsa"].to<JsonArray>();
+        const char* v = fwUpdate.getCustomVersion();
+        if (v != nullptr && v[0] != '\0') {
+            JsonArray option = arr.add<JsonArray>();
+            option.add(v);
+            option.add(v);
+            option.add(0);
+        }
     }
 }
 

@@ -1,6 +1,29 @@
 #include <string>
+#include <HTTPClient.h>
+#include <ArduinoJson.h>
 #include "JaamFirmwareUpdate.h"
 #include "JaamLogs.h"
+
+// [rsa_lux] Неофіційний канал оновлення. Маніфест і прошивки лежать на GitHub автора доопрацьованої версії.
+// Дозволені лише адреси з цим префіксом: навіть якщо маніфест підмінять, завантаження з інших сайтів не піде.
+static const char* const RSA_LUX_URL_PREFIX = "https://raw.githubusercontent.com/Rsa76d/";
+static const char* const RSA_LUX_MANIFEST_URL = "https://raw.githubusercontent.com/Rsa76d/jaam_fusion/lux-firmware/manifest.json";
+static const uint32_t RSA_LUX_CHECK_INTERVAL_MS = 6UL * 60UL * 60UL * 1000UL;  // перевірка раз на 6 годин
+static const uint32_t RSA_LUX_RETRY_INTERVAL_MS = 10UL * 60UL * 1000UL;        // після помилки повтор через 10 хв
+static const uint32_t RSA_LUX_FIRST_CHECK_DELAY_MS = 20000;                    // не раніше 20 с після запуску
+
+// Ключ у маніфесті залежно від чипа
+#if ARDUINO_ESP32S3_DEV
+static const char* const RSA_LUX_CHIP_KEY = "s3";
+#elif ARDUINO_ESP32C3_DEV
+static const char* const RSA_LUX_CHIP_KEY = "c3";
+#else
+static const char* const RSA_LUX_CHIP_KEY = "esp32";
+#endif
+
+static bool isAllowedCustomUrl(const char* url) {
+    return url != nullptr && strncmp(url, RSA_LUX_URL_PREFIX, strlen(RSA_LUX_URL_PREFIX)) == 0;
+}
 
 void JaamFirmwareUpdate::setDisplay(JaamDisplay* display) {
     _display = display;
@@ -75,7 +98,7 @@ void JaamFirmwareUpdate::initCallbacks() {
 }
 
 void JaamFirmwareUpdate::processBatch(const uint8_t* data, size_t bodyLen, bool isBeta) {
-    bool isActiveChannel = (isBeta == _activeIsBeta);
+    bool isActiveChannel = (_activeChannel == (isBeta ? FW_CHANNEL_BETA : FW_CHANNEL_PROD));
     static constexpr size_t RECORD_FW = 5;
     size_t count = bodyLen / RECORD_FW;
     if (count > MAX_FW) {
@@ -128,9 +151,23 @@ void JaamFirmwareUpdate::processBatch(const uint8_t* data, size_t bodyLen, bool 
     }
 }
 
-void JaamFirmwareUpdate::applyActiveChannel(bool isBeta) {
-    _activeIsBeta = isBeta;
-    const JaamFirmware* arr = _activeIsBeta ? _firmwares_beta : _firmwares_prod;
+void JaamFirmwareUpdate::applyActiveChannel(int channel) {
+    if (channel < FW_CHANNEL_PROD || channel > FW_CHANNEL_RSA_LUX) channel = FW_CHANNEL_PROD;
+    const bool channelChanged = (channel != _activeChannel);
+    _activeChannel = channel;
+
+    // [rsa_lux] Неофіційний канал: стан береться з маніфесту, а не зі списків сервера
+    if (_activeChannel == FW_CHANNEL_RSA_LUX) {
+        if (channelChanged) {
+            _customCheckPending = true;     // перевірити маніфест якнайшвидше
+            _fwUpdateAvailable = false;     // не показувати оновлення з іншого каналу
+        }
+        if (_customVersion[0] != '\0') applyCustomState();
+        return;
+    }
+
+    const bool isBeta = (_activeChannel == FW_CHANNEL_BETA);
+    const JaamFirmware* arr = isBeta ? _firmwares_beta : _firmwares_prod;
 
     JaamFirmware latestInChannel{};
     for (size_t i = 0; i < MAX_FW; ++i) {
@@ -158,8 +195,8 @@ void JaamFirmwareUpdate::applyActiveChannel(bool isBeta) {
     if (_servicePinCb) _servicePinCb();
 }
 
-bool JaamFirmwareUpdate::requestUpdate(const char* id, bool isBeta) {
-    if (!isValidFirmwareId(id, isBeta)) {
+bool JaamFirmwareUpdate::requestUpdate(const char* id, int channel) {
+    if (!isValidFirmwareId(id, channel)) {
         if (_display) _display->showServiceMessage("Невідома версія", "Помилка оновлення:", 5000);
         LOG.printf("[FIRMWARE] Invalid firmware ID: %s\n", id ? id : "(null)");
         return false;
@@ -183,7 +220,7 @@ void JaamFirmwareUpdate::download() {
     disableLoopWDT();
 
     LOG.println("Starting firmware update...");
-    char firmwareUrlChar[100];
+    char firmwareUrlChar[220];
 
     LOG.println("Building firmware url...");
 #if ARDUINO_ESP32S3_DEV
@@ -193,6 +230,17 @@ void JaamFirmwareUpdate::download() {
 #else
     snprintf(firmwareUrlChar, sizeof(firmwareUrlChar), "https://update.jaam.net.ua/%s", _fwUpdateId);
 #endif
+
+    // [rsa_lux] Неофіційний канал: адреса береться з перевіреного маніфесту
+    if (_activeChannel == FW_CHANNEL_RSA_LUX) {
+        if (!isAllowedCustomUrl(_customUrl)) {
+            LOG.printf("[FIRMWARE] rsa_lux: url is not allowed: %s\n", _customUrl);
+            if (_display) _display->showServiceMessage("Невірна адреса", "Помилка оновлення:", 5000);
+            enableLoopWDT();
+            return;
+        }
+        snprintf(firmwareUrlChar, sizeof(firmwareUrlChar), "%s", _customUrl);
+    }
 
     LOG.printf("Firmware url: %s\n", firmwareUrlChar);
     _updateClient.setInsecure();
@@ -262,7 +310,9 @@ bool JaamFirmwareUpdate::isNewerFirmware(const JaamFirmware& candidate, const Ja
     if (candidate.beta == 0 && current.beta > 0) return true;
     if (candidate.beta > 0 && current.beta == 0) return false;
     // Обидва beta або обидва stable: більший номер beta → новіший
-    return candidate.beta > current.beta;
+    if (candidate.beta != current.beta) return candidate.beta > current.beta;
+    // [rsa_lux] Однакова офіційна основа: новішою вважається збірка з більшим номером lux
+    return candidate.lux > current.lux;
 }
 
 JaamFirmware JaamFirmwareUpdate::parseFirmwareVersion(const char* version) {
@@ -280,6 +330,8 @@ JaamFirmware JaamFirmwareUpdate::parseFirmwareVersion(const char* version) {
             part++;
         } else if (token[0] == 'b' && strcmp(token, "bin") != 0) {
             fw.beta = atoi(token + 1);
+        } else if (strncmp(token, "lux", 3) == 0 && isdigit(token[3])) {
+            fw.lux = atoi(token + 3);   // [rsa_lux] суфікс "-luxN"
         }
         token = strtok(NULL, ".-");
     }
@@ -315,10 +367,16 @@ void JaamFirmwareUpdate::fillFwVersion(char* result, JaamFirmware fw) {
     strcpy(result, version.c_str());
 }
 
-bool JaamFirmwareUpdate::isValidFirmwareId(const char* id, bool isBeta) const {
+bool JaamFirmwareUpdate::isValidFirmwareId(const char* id, int channel) const {
     if (id == nullptr || strlen(id) == 0) {
         return false;
     }
+
+    // [rsa_lux] Неофіційний канал: дозволена лише версія з перевіреного маніфесту
+    if (channel == FW_CHANNEL_RSA_LUX) {
+        return _customVersion[0] != '\0' && strcmp(id, _customVersion) == 0 && isAllowedCustomUrl(_customUrl);
+    }
+    const bool isBeta = (channel == FW_CHANNEL_BETA);
 
     JaamFirmware candidate = parseFirmwareVersion(id);
 
@@ -340,4 +398,97 @@ bool JaamFirmwareUpdate::isValidFirmwareId(const char* id, bool isBeta) const {
     }
 
     return false;
+}
+
+// ───────────────────────── [rsa_lux] неофіційний канал оновлення ─────────────────────────
+
+const char* JaamFirmwareUpdate::getCustomVersion() const {
+    return _customVersion;
+}
+
+// Оновлює спільний стан «є/немає оновлення» за версією з маніфесту
+void JaamFirmwareUpdate::applyCustomState() {
+    JaamFirmware fw = parseFirmwareVersion(_customVersion);
+    snprintf(_newFwVersion, sizeof(_newFwVersion), "%s", _customVersion);
+    snprintf(_fwUpdateId, sizeof(_fwUpdateId), "%s", _customVersion);
+    _fwUpdateAvailable = isNewerFirmware(fw, _firmware);
+
+    LOG.printf("[FIRMWARE] rsa_lux: latest %s, current %s, update available: %d\n",
+               _customVersion, _currentFwVersion, _fwUpdateAvailable);
+
+    if (_api) _api->setNewFirmwareInfo(_newFwVersion);
+    if (_servicePinCb) _servicePinCb();
+}
+
+// Завантажує маніфест з GitHub. Формат: {"version":"5.1.2-b3-lux9","esp32":"https://...bin","c3":"https://...bin"}
+bool JaamFirmwareUpdate::fetchCustomManifest() {
+    LOG.printf("[FIRMWARE] rsa_lux: checking manifest\n");
+    _updateClient.stop();
+    _updateClient.setInsecure();
+
+    HTTPClient http;
+    http.setConnectTimeout(8000);
+    http.setTimeout(8000);
+    http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
+    if (!http.begin(_updateClient, RSA_LUX_MANIFEST_URL)) {
+        LOG.printf("[FIRMWARE] rsa_lux: http.begin failed\n");
+        return false;
+    }
+
+    int code = http.GET();
+    if (code != HTTP_CODE_OK) {
+        LOG.printf("[FIRMWARE] rsa_lux: manifest HTTP code %d\n", code);
+        http.end();
+        return false;
+    }
+    int len = http.getSize();
+    if (len > 1500) {
+        LOG.printf("[FIRMWARE] rsa_lux: manifest too large (%d)\n", len);
+        http.end();
+        return false;
+    }
+    String body = http.getString();
+    http.end();
+    _updateClient.stop();
+
+    JsonDocument doc;
+    if (deserializeJson(doc, body)) {
+        LOG.printf("[FIRMWARE] rsa_lux: manifest is not valid JSON\n");
+        return false;
+    }
+
+    const char* version = doc["version"] | "";
+    const char* url = doc[RSA_LUX_CHIP_KEY] | "";
+    JaamFirmware fw = parseFirmwareVersion(version);
+    if ((fw.major == 0 && fw.minor == 0) || strlen(version) >= sizeof(_customVersion)) {
+        LOG.printf("[FIRMWARE] rsa_lux: bad version in manifest\n");
+        return false;
+    }
+    if (!isAllowedCustomUrl(url) || strlen(url) >= sizeof(_customUrl)) {
+        LOG.printf("[FIRMWARE] rsa_lux: no allowed url for chip %s\n", RSA_LUX_CHIP_KEY);
+        return false;
+    }
+
+    snprintf(_customVersion, sizeof(_customVersion), "%s", version);
+    snprintf(_customUrl, sizeof(_customUrl), "%s", url);
+    return true;
+}
+
+// Викликається з основного циклу: перевіряє маніфест при запуску, при виборі каналу і раз на 6 годин
+void JaamFirmwareUpdate::processCustomChannel(bool wifiConnected) {
+    if (_activeChannel != FW_CHANNEL_RSA_LUX || !wifiConnected || _needUpdate) return;
+
+    const uint32_t now = millis();
+    if (now < RSA_LUX_FIRST_CHECK_DELAY_MS) return;
+    const bool due = _customCheckPending || (uint32_t)(now - _customLastCheck) >= RSA_LUX_CHECK_INTERVAL_MS;
+    if (!due) return;
+
+    _customCheckPending = false;
+    _customLastCheck = now;
+    if (fetchCustomManifest()) {
+        applyCustomState();
+    } else {
+        // повторити через 10 хвилин
+        _customLastCheck = now - (RSA_LUX_CHECK_INTERVAL_MS - RSA_LUX_RETRY_INTERVAL_MS);
+    }
 }

@@ -262,7 +262,7 @@ std::map<Type, SettingItemInt> intSettings = {
     
     // System settings
     {LOGS_ENABLED, {"le", 0}},                             // Enable serial logs (0/1)
-    {FW_UPDATE_CHANNEL, {"fwuc", 0}},                      // Firmware update channel (0 = stable, 1 = beta)
+    {FW_UPDATE_CHANNEL, {"fwuc", 0}},                      // Firmware update channel (0 = stable, 1 = beta, 2 = rsa_lux)
     
     // Animation timers (seconds)
     {ALERT_ON_TIME, {"aonte", 300}},                       // Animation duration for alert on

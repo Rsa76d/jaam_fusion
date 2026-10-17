@@ -591,7 +591,7 @@ function updateFirmwareIdOptions(channelValue) {
     if (!firmwareSelect) return;
     
     // Determine which list to use based on channel
-    const listName = channelValue === '0' ? 'firmware_versions_prod' : 'firmware_versions_beta';
+    const listName = channelValue === '0' ? 'firmware_versions_prod' : (channelValue === '2' ? 'firmware_versions_rsa' : 'firmware_versions_beta');
     const opts = globalLists[listName] || [];
     
     // Store current selection
@@ -626,6 +626,12 @@ function updateFirmwareIdOptions(channelValue) {
 // Load release notes for a specific firmware version from GitHub
 async function loadReleaseNotes(version, panel) {
     if (!panel || !version) return;
+
+    // [rsa_lux] Неофіційні збірки: офіційних release notes немає
+    if (String(version).indexOf('-lux') !== -1) {
+        panel.innerHTML = '<div class="release-notes-content">Неофіційна збірка rsa_lux. Опис і зміни: <a href="https://github.com/Rsa76d/jaam_fusion/tree/lux-firmware" target="_blank" rel="noopener">github.com/Rsa76d/jaam_fusion (гілка lux-firmware)</a></div>';
+        return;
+    }
     
     // Check cache first
     if (releaseNotesCache[version]) {
