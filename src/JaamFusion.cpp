@@ -1997,7 +1997,7 @@ float getSmoothedLightFraction() {
     } else {
         invalidLogged = false;
         if (lux < 0) lux = 0;
-        float factor = constrain(settings.getFloat(LIGHT_SENSOR_FACTOR), 0.1f, 30.0f);
+        float factor = constrain(settings.getFloat(LIGHT_SENSOR_FACTOR), 0.01f, 30.0f);
         float l = log1pf(lux * factor);
         if (isnan(smoothLog)) {
             smoothLog = l;

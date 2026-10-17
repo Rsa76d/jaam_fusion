@@ -521,7 +521,7 @@ void JaamApi::handleWebSocketMessage(WebsocketsClient& client, WebsocketsMessage
             {"max",                  BRIGHTNESS_SMOOTH_MAX,       0, 0,    100},
             {"min_day",              BRIGHTNESS_SMOOTH_MIN_DAY,   0, 0,    100},
             {"min_night",            BRIGHTNESS_SMOOTH_MIN_NIGHT, 0, 0,    100},
-            {"sensitivity",          LIGHT_SENSOR_FACTOR,         2, 0.1f, 30},
+            {"sensitivity",          LIGHT_SENSOR_FACTOR,         2, 0.01f, 30},
             {"display",              DISPLAY_BRIGHTNESS,          0, 1,    100},
             {"display_auto",         DISPLAY_AUTO_BRIGHTNESS,     1, 0,    1},
             {"display_min",          DISPLAY_BRIGHTNESS_MIN,      0, 1,    100},
@@ -919,7 +919,7 @@ void JaamApi::fillBrightnessState(JsonObject b) {
     b["max"] = settings->getInt(BRIGHTNESS_SMOOTH_MAX);
     b["min_day"] = settings->getInt(BRIGHTNESS_SMOOTH_MIN_DAY);
     b["min_night"] = settings->getInt(BRIGHTNESS_SMOOTH_MIN_NIGHT);
-    b["sensitivity"] = roundf(settings->getFloat(LIGHT_SENSOR_FACTOR) * 10.0f) / 10.0f;
+    b["sensitivity"] = roundf(settings->getFloat(LIGHT_SENSOR_FACTOR) * 100.0f) / 100.0f;
     b["current"] = currentMapBrightness >= 0 ? currentMapBrightness : settings->getInt(CURRENT_BRIGHTNESS);
     b["display"] = settings->getInt(DISPLAY_BRIGHTNESS);
     b["display_auto"] = settings->getBool(DISPLAY_AUTO_BRIGHTNESS);

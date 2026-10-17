@@ -1202,12 +1202,21 @@ function renderControl(ctrl, lists) {
         const minNum = Number(min);
         const maxNum = Number(max);
 
+        // [lux] Чутливість сенсора: повзунок логарифмічний, щоб малі значення (0.01..1) були розтягнуті
+        const isLogSlider = (name === 'light_sensor_factor' && minNum > 0);
+        const LOG_STEPS = 1000;
+        const posToValue = (p) => {
+            const v = minNum * Math.pow(maxNum / minNum, Number(p) / LOG_STEPS);
+            return v < 1 ? Math.round(v * 100) / 100 : Math.round(v * 10) / 10;
+        };
+        const valueToPos = (v) => Math.round(LOG_STEPS * Math.log(Math.min(maxNum, Math.max(minNum, Number(v))) / minNum) / Math.log(maxNum / minNum));
+
         const rng = document.createElement('input');
         rng.type = 'range';
-        rng.min = min;
-        rng.max = max;
-        rng.step = step;
-        rng.value = current;
+        rng.min = isLogSlider ? 0 : min;
+        rng.max = isLogSlider ? LOG_STEPS : max;
+        rng.step = isLogSlider ? 1 : step;
+        rng.value = isLogSlider ? valueToPos(current) : current;
         rng.className = 'slider';
         rng.id = name;
 
@@ -1223,18 +1232,19 @@ function renderControl(ctrl, lists) {
         inp.oninput = (e) => {
             const val = Number(e.target.value);
             if (!Number.isFinite(val)) return;
-            rng.value = Math.min(maxNum, Math.max(minNum, val));
+            const cl = Math.min(maxNum, Math.max(minNum, val));
+            rng.value = isLogSlider ? valueToPos(cl) : cl;
         };
         inp.onchange = (e) => {
             const val = Number(e.target.value);
             const clamped = Number.isFinite(val) ? Math.min(maxNum, Math.max(minNum, val)) : Number(rng.value);
             inp.value = clamped;
-            rng.value = clamped;
+            rng.value = isLogSlider ? valueToPos(clamped) : clamped;
             updateParameter(name, applyBrightnessOrder(name, clamped)); // [lux]
         };
 
-        rng.oninput = (e) => updateSliderValue(name, e.target.value);
-        rng.onchange = (e) => updateParameter(name, applyBrightnessOrder(name, e.target.value)); // [lux]
+        rng.oninput = (e) => updateSliderValue(name, isLogSlider ? posToValue(e.target.value) : e.target.value);
+        rng.onchange = (e) => updateParameter(name, applyBrightnessOrder(name, isLogSlider ? posToValue(e.target.value) : e.target.value)); // [lux]
 
         const row = document.createElement('div');
         row.className = 'slider-row';

@@ -370,7 +370,7 @@ std::map<Type, SettingItemFloat> floatSettings = {
     {TEMP_CORRECTION, {"ltc", 0.0f}},                       // Temperature correction offset (°C)
     {HUM_CORRECTION, {"lhc", 0.0f}},                        // Humidity correction offset (%)
     {PRESSURE_CORRECTION, {"lpc", 0.0f}},                   // Pressure correction offset (hPa)
-    {LIGHT_SENSOR_FACTOR, {"lsf", 1.0f}},                   // Light sensor sensitivity for smooth brightness (multiplier, 0.1..30)
+    {LIGHT_SENSOR_FACTOR, {"lsf", 1.0f}},                   // Light sensor sensitivity for smooth brightness (multiplier, 0.01..30)
 };
 
 Preferences preferences;
@@ -577,9 +577,9 @@ float JaamSettings::getFloat(Type type) {
 
 bool JaamSettings::saveFloat(Type type, float value, bool saveToPrefs) {
     if (floatSettings.find(type) != floatSettings.end()) {
-        // [lux] Чутливість сенсора: 0.1..30
-        if (type == LIGHT_SENSOR_FACTOR && (isnan(value) || value < 0.1f || value > 30.0f)) {
-            LOG.printf("[SETTINGS] LIGHT_SENSOR_FACTOR %.2f is out of range [0.1..30]\n", value);
+        // [lux] Чутливість сенсора: 0.01..30
+        if (type == LIGHT_SENSOR_FACTOR && (isnan(value) || value < 0.01f || value > 30.0f)) {
+            LOG.printf("[SETTINGS] LIGHT_SENSOR_FACTOR %.2f is out of range [0.01..30]\n", value);
             return false;
         }
         SettingItemFloat setting = floatSettings[type];
