@@ -350,6 +350,11 @@ void JaamFirmwareUpdate::fillFwVersion(char* result, JaamFirmware fw) {
         version += "-b" + std::to_string(fw.beta);
     }
 
+    // [rsa_lux] неофіційний суфікс збірки, щоб HA і веб бачили справжню версію
+    if (fw.lux > 0) {
+        version += "-lux" + std::to_string(fw.lux);
+    }
+
     #if ARDUINO_ESP32S3_DEV
     version += "-s3";
     #elif ARDUINO_ESP32C3_DEV
