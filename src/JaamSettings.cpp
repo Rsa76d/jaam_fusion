@@ -262,6 +262,7 @@ std::map<Type, SettingItemInt> intSettings = {
     
     // System settings
     {LOGS_ENABLED, {"le", 0}},                             // Enable serial logs (0/1)
+    {API_NOTIFICATIONS, {"apint", 0}},                     // lux12: pass threat notifications (bits 5..10) to the API/HA for the animation time (0/1)
     {FW_UPDATE_CHANNEL, {"fwuc", 0}},                      // Firmware update channel (0 = stable, 1 = beta, 2 = rsa_lux)
     
     // Animation timers (seconds)

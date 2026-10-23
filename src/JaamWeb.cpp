@@ -116,6 +116,7 @@ static const ParamMapping ALL_PARAM_MAPPINGS[] = {
     {"ws_server_port", WS_SERVER_PORT, TYPE_INT},
     {"ntp_host", NTP_HOST, TYPE_STRING},
     {"api_enabled", API_ENABLED, TYPE_BOOL},
+    {"api_notifications", API_NOTIFICATIONS, TYPE_BOOL},
     {"api_port", API_PORT, TYPE_INT},
     {"web_auth_enabled", WEB_AUTH_ENABLED, TYPE_BOOL},
     {"web_login", WEB_LOGIN, TYPE_STRING},

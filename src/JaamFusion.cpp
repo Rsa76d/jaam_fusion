@@ -832,6 +832,67 @@ void triggerHomeAlertAnimation(int8_t bit) {
     }
 }
 
+// ─── [lux12] Сповіщення про загрози (біти 5..10) в API / Home Assistant ──────────
+// Сповіщення (дрони, ракети, КАБи тощо) не мають "відбою", лише таймаут показу на мапі.
+// Якщо увімкнено API_NOTIFICATIONS, відповідний біт додається до home_alert_flags в API
+// на час анімації цього типу (DRONE_TIME, MISSILE_TIME ...) і потім знімається.
+// Стани (жовта/червона тривога) цим не змінюються.
+static const int HA_NOTIF_FIRST_BIT = AlertModes::DRONES;
+static const int HA_NOTIF_BITS = AlertModes::RECON_DRONES - AlertModes::DRONES + 1;
+static uint16_t haNotifFlags = 0;
+static uint32_t haNotifExpire[HA_NOTIF_BITS] = {0};
+
+static int haNotifDurationSec(int bit) {
+    switch (bit) {
+        case AlertModes::DRONES:       return settings.getInt(DRONE_TIME);
+        case AlertModes::MISSILES:     return settings.getInt(MISSILE_TIME);
+        case AlertModes::KABS:         return settings.getInt(KAB_TIME);
+        case AlertModes::BALLISTIC:    return settings.getInt(BALLISTIC_TIME);
+        case AlertModes::EXPLOSION:    return settings.getInt(EXPLOSION_TIME);
+        case AlertModes::RECON_DRONES: return settings.getInt(RECON_DRONE_TIME);
+        default:                       return 0;
+    }
+}
+
+// Викликається при сповіщенні для домашнього регіону.
+static void haNotifRegister(uint16_t flags16) {
+    if (!settings.getBool(API_NOTIFICATIONS)) return;
+    bool changed = false;
+    for (int i = 0; i < HA_NOTIF_BITS; ++i) {
+        int bit = HA_NOTIF_FIRST_BIT + i;
+        if (!(flags16 & (1 << bit))) continue;
+        if (!isAlertBitEnabled(bit)) continue;
+        int sec = haNotifDurationSec(bit);
+        if (sec < 1) sec = 1;
+        haNotifExpire[i] = millis() + (uint32_t)sec * 1000UL;
+        haNotifFlags |= (uint16_t)(1 << bit);
+        changed = true;
+        LOG.printf("[HA-NOTIF] bit %d on for %d s\n", bit, sec);
+    }
+    if (changed) api.setHomeAlert(homeAlertFlags | haNotifFlags);
+}
+
+// Знімає біти, у яких вийшов час (або якщо опцію вимкнули). Викликається з loop().
+static void haNotifTick() {
+    static uint32_t lastCheck = 0;
+    uint32_t now = millis();
+    if (now - lastCheck < 500) return;
+    lastCheck = now;
+    if (haNotifFlags == 0) return;
+    bool enabled = settings.getBool(API_NOTIFICATIONS);
+    bool changed = false;
+    for (int i = 0; i < HA_NOTIF_BITS; ++i) {
+        uint16_t mask = (uint16_t)(1 << (HA_NOTIF_FIRST_BIT + i));
+        if (!(haNotifFlags & mask)) continue;
+        if (!enabled || (int32_t)(now - haNotifExpire[i]) >= 0) {
+            haNotifFlags &= ~mask;
+            changed = true;
+            LOG.printf("[HA-NOTIF] bit %d off\n", HA_NOTIF_FIRST_BIT + i);
+        }
+    }
+    if (changed) api.setHomeAlert(homeAlertFlags | haNotifFlags);
+}
+
 void alertAction(int bit, int districtId) {
     const char* districtName = getNameById(DISTRICTS, districtId, MAX_REGIONS);
     LOG.printf("[ALERT] Home district %s status changed from %d to %d\n", districtName, alertBit, bit);
@@ -1109,6 +1170,7 @@ void onMessageCallback(WebsocketsMessage msg) {
                 continue;
             }
             LOG.printf("[WEBSOCKET] notification region %d:\t\t0x%04X\n", region_id, flags16);
+            if ((uint16_t)settings.getInt(HOME_DISTRICT) == region_id) haNotifRegister(flags16);  // [lux12]
 
             // Знаходимо поточний найвищий alert-bit для LEDs цього регіону з кешу
             // (без heap — ledBitCache вже містить актуальний стан після ALERTS_BATCH)
@@ -1251,7 +1313,7 @@ void onMessageCallback(WebsocketsMessage msg) {
             alertBit = localAlertBit;
             int homeIdx = getRegionFlatIdx(settings.getInt(HOME_DISTRICT));
             uint16_t homeFlags = (homeIdx >= 0) ? alertsFlat[homeIdx] : 0;
-            api.setHomeAlert(homeFlags);
+            api.setHomeAlert(homeFlags | haNotifFlags);
             homeAlertFlags = homeFlags;
         }
 
@@ -1284,7 +1346,7 @@ void onMessageCallback(WebsocketsMessage msg) {
             alertBit = localAlertBit;
             int homeInitIdx = getRegionFlatIdx(settings.getInt(HOME_DISTRICT));
             uint16_t homeFlags = (homeInitIdx >= 0) ? alertsFlat[homeInitIdx] : 0;
-            api.setHomeAlert(homeFlags);
+            api.setHomeAlert(homeFlags | haNotifFlags);
             homeAlertFlags = homeFlags;
             int homeTempIdx = getRegionFlatIdx(settings.getInt(HOME_DISTRICT));
             uint8_t encodedTemp = (homeTempIdx >= 0 && homeTempIdx < (int)(MAX_REGIONS + 1) && temperatureFlat[homeTempIdx] != TEMP_NO_DATA)
@@ -3353,7 +3415,7 @@ void handleUpdateHomeAlertBit() {
     int homeIdx = getRegionFlatIdx(settings.getInt(HOME_DISTRICT));
     uint16_t homeFlags = (homeIdx >= 0) ? alertsFlat[homeIdx] : 0;
     LOG.printf("[SETTINGS] homeAlertFlags: %u\n", homeFlags);
-    api.setHomeAlert(homeFlags);
+    api.setHomeAlert(homeFlags | haNotifFlags);
     homeAlertFlags = homeFlags;
     int homeTempIdx = getRegionFlatIdx(settings.getInt(HOME_DISTRICT));
     uint8_t encodedTemp = (homeTempIdx >= 0 && temperatureFlat[homeTempIdx] != TEMP_NO_DATA)
@@ -3943,5 +4005,6 @@ void loop() {
     async.run();
     web.handleClient();
     api.handleWebSocketClients();
+    haNotifTick();  // [lux12]
     buttons.tick();
 }
