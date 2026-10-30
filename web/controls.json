@@ -462,13 +462,6 @@
             ""
         ],
         [
-            "bool",
-            "api_notifications",
-            "Передавати сповіщення про загрози (БпЛА, ракети тощо) в API / Home Assistant на час їх показу на мапі (доробка rsa_lux, неофіційно)",
-            "network",
-            "api_enabled==1"
-        ],
-        [
             "text",
             "api_port",
             "Порт API (WebSocket)",
