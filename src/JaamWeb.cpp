@@ -34,6 +34,7 @@ extern void requestRecalculateLeds();
 extern void requestAdaptColors();
 extern void requestToRegenerateBgColorMap();
 extern void requestWebsocketReconnect();
+extern void handleReconnectWebsocket(bool resetBackoff);
 extern void requestReconfigureAll();
 extern void requestRebootDevice();
 
@@ -1512,7 +1513,7 @@ void JaamWeb::handleSaveMap() {
         server.sendHeader("Location", "/map-editor", true);
         requestRecalculateLeds();
         requestAdaptColors();
-        requestWebsocketReconnect();
+        handleReconnectWebsocket(true); // дія користувача: без очікування backoff
         server.send(303);
     } else {
         LOG.printf("[WEB] Custom map saving error.\n");
