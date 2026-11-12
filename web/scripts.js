@@ -291,6 +291,53 @@ function updateParameter(name, value) {
         .catch(e => console.error('Network error:', e));
 }
 
+// [lux] Порядок яскравостей: [нижня, верхня]. Прошивка теж обмежує значення - тут лише миттєве відображення
+const BRIGHTNESS_ORDER = [
+    ['brightness_smooth_min_night', 'brightness_smooth_min_day'],
+    ['brightness_smooth_min_day', 'brightness_smooth_max'],
+    ['display_brightness_min', 'display_brightness'],
+];
+
+function setSliderUiValue(name, value) {
+    const rng = document.getElementById(name);
+    const inp = document.getElementById(name + 'Input');
+    if (rng) rng.value = value;
+    if (inp) inp.value = value;
+}
+
+function getSliderUiValue(name) {
+    const rng = document.getElementById(name);
+    return rng ? Number(rng.value) : NaN;
+}
+
+function applyBrightnessOrder(name, value) {
+    let v = Number(value);
+    if (!Number.isFinite(v)) return value;
+    // нижню не можна підняти вище верхньої
+    for (const [lower, upper] of BRIGHTNESS_ORDER) {
+        if (name !== lower) continue;
+        const up = getSliderUiValue(upper);
+        if (Number.isFinite(up) && v > up) {
+            v = up;
+            setSliderUiValue(name, v);
+        }
+    }
+    // верхню опустили нижче нижньої - нижні опускаються слідом (ланцюжком)
+    const changed = [[name, v]];
+    while (changed.length) {
+        const [n, val] = changed.pop();
+        for (const [lower, upper] of BRIGHTNESS_ORDER) {
+            if (upper !== n) continue;
+            const lo = getSliderUiValue(lower);
+            if (Number.isFinite(lo) && lo > val) {
+                setSliderUiValue(lower, val);
+                changed.push([lower, val]);
+            }
+        }
+    }
+    return v;
+}
+
 function updateSliderValue(name, value) {
     const inputElement = document.getElementById(name + 'Input');
     if (inputElement) {
@@ -544,7 +591,7 @@ function updateFirmwareIdOptions(channelValue) {
     if (!firmwareSelect) return;
     
     // Determine which list to use based on channel
-    const listName = channelValue === '0' ? 'firmware_versions_prod' : 'firmware_versions_beta';
+    const listName = channelValue === '0' ? 'firmware_versions_prod' : (channelValue === '2' ? 'firmware_versions_rsa' : 'firmware_versions_beta');
     const opts = globalLists[listName] || [];
     
     // Store current selection
@@ -579,6 +626,12 @@ function updateFirmwareIdOptions(channelValue) {
 // Load release notes for a specific firmware version from GitHub
 async function loadReleaseNotes(version, panel) {
     if (!panel || !version) return;
+
+    // [rsa_lux] Неофіційні збірки: офіційних release notes немає
+    if (String(version).indexOf('-lux') !== -1) {
+        panel.innerHTML = '<div class="release-notes-content">Неофіційна збірка rsa_lux. Опис і зміни: <a href="https://github.com/Rsa76d/jaam_fusion/tree/lux-firmware" target="_blank" rel="noopener">github.com/Rsa76d/jaam_fusion (гілка lux-firmware)</a></div>';
+        return;
+    }
     
     // Check cache first
     if (releaseNotesCache[version]) {
@@ -1149,12 +1202,21 @@ function renderControl(ctrl, lists) {
         const minNum = Number(min);
         const maxNum = Number(max);
 
+        // [lux] Чутливість сенсора: повзунок логарифмічний, щоб малі значення (0.01..1) були розтягнуті
+        const isLogSlider = (name === 'light_sensor_factor' && minNum > 0);
+        const LOG_STEPS = 1000;
+        const posToValue = (p) => {
+            const v = minNum * Math.pow(maxNum / minNum, Number(p) / LOG_STEPS);
+            return v < 1 ? Math.round(v * 100) / 100 : Math.round(v * 10) / 10;
+        };
+        const valueToPos = (v) => Math.round(LOG_STEPS * Math.log(Math.min(maxNum, Math.max(minNum, Number(v))) / minNum) / Math.log(maxNum / minNum));
+
         const rng = document.createElement('input');
         rng.type = 'range';
-        rng.min = min;
-        rng.max = max;
-        rng.step = step;
-        rng.value = current;
+        rng.min = isLogSlider ? 0 : min;
+        rng.max = isLogSlider ? LOG_STEPS : max;
+        rng.step = isLogSlider ? 1 : step;
+        rng.value = isLogSlider ? valueToPos(current) : current;
         rng.className = 'slider';
         rng.id = name;
 
@@ -1170,18 +1232,19 @@ function renderControl(ctrl, lists) {
         inp.oninput = (e) => {
             const val = Number(e.target.value);
             if (!Number.isFinite(val)) return;
-            rng.value = Math.min(maxNum, Math.max(minNum, val));
+            const cl = Math.min(maxNum, Math.max(minNum, val));
+            rng.value = isLogSlider ? valueToPos(cl) : cl;
         };
         inp.onchange = (e) => {
             const val = Number(e.target.value);
             const clamped = Number.isFinite(val) ? Math.min(maxNum, Math.max(minNum, val)) : Number(rng.value);
             inp.value = clamped;
-            rng.value = clamped;
-            updateParameter(name, clamped);
+            rng.value = isLogSlider ? valueToPos(clamped) : clamped;
+            updateParameter(name, applyBrightnessOrder(name, clamped)); // [lux]
         };
 
-        rng.oninput = (e) => updateSliderValue(name, e.target.value);
-        rng.onchange = (e) => updateParameter(name, e.target.value);
+        rng.oninput = (e) => updateSliderValue(name, isLogSlider ? posToValue(e.target.value) : e.target.value);
+        rng.onchange = (e) => updateParameter(name, applyBrightnessOrder(name, isLogSlider ? posToValue(e.target.value) : e.target.value)); // [lux]
 
         const row = document.createElement('div');
         row.className = 'slider-row';

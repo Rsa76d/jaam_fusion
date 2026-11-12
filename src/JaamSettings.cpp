@@ -89,7 +89,7 @@ std::map<Type, SettingItemInt> intSettings = {
     {BRIGHTNESS, {"brightness", 50}},                      // Manual brightness
     {BRIGHTNESS_DAY, {"brd", 50}},                         // Auto: day brightness
     {BRIGHTNESS_NIGHT, {"brn", 10}},                       // Auto: night brightness
-    {BRIGHTNESS_MODE, {"bra", 0}},                         // 0 = manual, 1 = auto day/night, 2 = auto sensor
+    {BRIGHTNESS_MODE, {"bra", 0}},                         // 0 = manual, 1 = auto day/night, 2 = auto sensor, 3 = smooth auto (lux)
     
     // Home district settings
     {HOME_ALERT_TIME, {"hat", 0}},                         // Seconds delay before home alert
@@ -130,6 +130,12 @@ std::map<Type, SettingItemInt> intSettings = {
     
     // Environmental settings
     {NIGHT_MODE_LIGHT_THRESHOLD, {"nmlt", 10}},            // Light level for night mode (lux)
+    {BRIGHTNESS_SMOOTH_MAX, {"brsmx", 80}},                // [lux] Smooth mode: brightness in bright light (%)
+    {BRIGHTNESS_SMOOTH_MIN_DAY, {"brsmd", 20}},            // [lux] Smooth mode: brightness in darkness, day hours (%)
+    {BRIGHTNESS_SMOOTH_MIN_NIGHT, {"brsmn", 3}},           // [lux] Smooth mode: brightness in darkness, night hours (%)
+    {DISPLAY_BRIGHTNESS, {"dbr", 100}},                    // [lux] Display brightness (%), max in auto mode
+    {DISPLAY_AUTO_BRIGHTNESS, {"dab", 0}},                 // [lux] Display auto brightness from light sensor (0/1)
+    {DISPLAY_BRIGHTNESS_MIN, {"dbrmin", 10}},              // [lux] Display min brightness in auto mode (%)
     {WEATHER_MIN_TEMP, {"mintemp", -10}},                  // Min temperature for color scale (°C)
     {WEATHER_MAX_TEMP, {"maxtemp", 30}},                   // Max temperature for color scale (°C)
     {WEATHER_AUTO_BOUNDS, {"wtab", 1}},                    // Auto-calculate temperature bounds from forecast (0/1)
@@ -256,7 +262,7 @@ std::map<Type, SettingItemInt> intSettings = {
     
     // System settings
     {LOGS_ENABLED, {"le", 0}},                             // Enable serial logs (0/1)
-    {FW_UPDATE_CHANNEL, {"fwuc", 0}},                      // Firmware update channel (0 = stable, 1 = beta)
+    {FW_UPDATE_CHANNEL, {"fwuc", 0}},                      // Firmware update channel (0 = stable, 1 = beta, 2 = rsa_lux)
     
     // Animation timers (seconds)
     {ALERT_ON_TIME, {"aonte", 300}},                       // Animation duration for alert on
@@ -307,6 +313,7 @@ std::map<Type, SettingItemInt> intSettings = {
     
     // Lamp mode
     {BRIGHTNESS_LAMP, {"blamp", 50}},                      // Lamp mode brightness (0-100%)
+    {BIND_LAMP_BRIGHTNESS, {"blb", 1}},                    // [lux] Bind lamp brightness to global brightness (0/1)
     
     // API settings
     {API_ENABLED, {"apie", 0}},                            // Enable HTTP API (0/1)
@@ -363,7 +370,7 @@ std::map<Type, SettingItemFloat> floatSettings = {
     {TEMP_CORRECTION, {"ltc", 0.0f}},                       // Temperature correction offset (°C)
     {HUM_CORRECTION, {"lhc", 0.0f}},                        // Humidity correction offset (%)
     {PRESSURE_CORRECTION, {"lpc", 0.0f}},                   // Pressure correction offset (hPa)
-    {LIGHT_SENSOR_FACTOR, {"lsf", 1.0f}},                   // Light sensor calibration factor (multiplier)
+    {LIGHT_SENSOR_FACTOR, {"lsf", 1.0f}},                   // Light sensor sensitivity for smooth brightness (multiplier, 0.01..30)
 };
 
 Preferences preferences;
@@ -440,6 +447,17 @@ bool JaamSettings::validateIntSetting(Type type, int value) {
         }
     }
     
+    // [lux] Відсоткові налаштування яскравості: 0..100, перемикачі: 0/1
+    if ((type == BRIGHTNESS_SMOOTH_MAX || type == BRIGHTNESS_SMOOTH_MIN_DAY || type == BRIGHTNESS_SMOOTH_MIN_NIGHT ||
+         type == DISPLAY_BRIGHTNESS || type == DISPLAY_BRIGHTNESS_MIN) && (value < 0 || value > 100)) {
+        LOG.printf("[SETTINGS] Brightness value %d is out of range [0..100]\n", value);
+        return false;
+    }
+    if (type == DISPLAY_AUTO_BRIGHTNESS && value != 0 && value != 1) {
+        LOG.printf("[SETTINGS] Bool value %d is invalid\n", value);
+        return false;
+    }
+
     // Для JAAM2: піни сирени не можуть бути BH1750_POWER_PIN (керуючий пін живлення для сенсора освітлення)
     if (getInt(HARDWARE) == HARDWARE::JAAM_2_1) { // JAAM2
         if ((type == ALERT_PIN || type == CLEAR_PIN || type == ALERT_PIN_2 || type == CLEAR_PIN_2) && value == BH1750_POWER_PIN) {
@@ -559,6 +577,11 @@ float JaamSettings::getFloat(Type type) {
 
 bool JaamSettings::saveFloat(Type type, float value, bool saveToPrefs) {
     if (floatSettings.find(type) != floatSettings.end()) {
+        // [lux] Чутливість сенсора: 0.01..30
+        if (type == LIGHT_SENSOR_FACTOR && (isnan(value) || value < 0.01f || value > 30.0f)) {
+            LOG.printf("[SETTINGS] LIGHT_SENSOR_FACTOR %.2f is out of range [0.01..30]\n", value);
+            return false;
+        }
         SettingItemFloat setting = floatSettings[type];
         if (saveToPrefs) {
             preferences.begin(PREFS_NAME, false);

@@ -72,6 +72,9 @@ void requestRebootDevice();
 void requestToRegenerateBgColorMap();
 void displayProcess();
 void brightnessProcess();
+void updateHomeEnergyRadiation();                     // [lux3]
+void displayBrightnessProcess();                       // [lux]
+void enforceBrightnessOrder(Type type);                // [lux]
 void rebuildSensorsListItems();
 bool isButtonActivated();
 
@@ -1437,6 +1440,7 @@ void onMessageCallback(WebsocketsMessage msg) {
         }
 
         adaptStripColorsAndBrightness();
+        updateHomeEnergyRadiation(); // [lux3]
     }
 
     if(type == TYPE_RADIATION_BATCH) {
@@ -1466,6 +1470,7 @@ void onMessageCallback(WebsocketsMessage msg) {
         }
 
         adaptStripColorsAndBrightness();
+        updateHomeEnergyRadiation(); // [lux3]
     }
 
     checkFreeHeap("Websockets data processing");
@@ -2010,11 +2015,167 @@ void adaptStripColorsAndBrightness() {
 
 
 // --- BRIGHTNESS Functions ---
+
+// [lux] ===== Плавна яскравість від сенсора освітлення =====
+// Освітленість (з урахуванням чутливості) згладжується в логарифмічній шкалі - око сприймає світло
+// логарифмічно, а коротка тінь чи спалах не смикають яскравість. Стала часу ~3 с і не залежить від
+// частоти викликів, тому мапа і дисплей можуть брати значення в одному циклі без подвійного згладжування.
+static const float LUX_REFERENCE     = 300.0f;  // освітленість (lx) для максимуму при чутливості 1.0
+static const float LUX_SMOOTH_TAU_MS = 3000.0f; // стала часу згладжування
+
+// Частка 0..1 (0 - темрява, 1 - яскраве світло) або NAN, якщо валідних показань ще не було
+float getSmoothedLightFraction() {
+    static float smoothLog = NAN;
+    static unsigned long lastUpdate = 0;
+    static bool invalidLogged = false;
+
+    if (!lightSensor.isLightSensorAvailable()) return NAN;
+
+    float lux = lightSensor.getLightLevel();
+    unsigned long now = millis();
+    if (isnan(lux)) {
+        if (!invalidLogged) {
+            invalidLogged = true;
+            LOG.printf("[BRIGHTNESS] Smooth: light sensor gave no valid reading, holding last value\n");
+        }
+    } else {
+        invalidLogged = false;
+        if (lux < 0) lux = 0;
+        float factor = constrain(settings.getFloat(LIGHT_SENSOR_FACTOR), 0.01f, 30.0f);
+        float l = log1pf(lux * factor);
+        if (isnan(smoothLog)) {
+            smoothLog = l;
+        } else {
+            float dt = (float)(now - lastUpdate);
+            if (dt > 0) smoothLog += (1.0f - expf(-dt / LUX_SMOOTH_TAU_MS)) * (l - smoothLog);
+        }
+        lastUpdate = now;
+    }
+    if (isnan(smoothLog)) return NAN;
+    float t = smoothLog / log1pf(LUX_REFERENCE);
+    // Згладжене значення лише асимптотично наближається до країв - "прилипаємо", щоб у темряві
+    // і на яскравому світлі виходити точно на задані мін/макс, а не на 1% поруч
+    if (t < 0.01f) return 0.0f;
+    if (t > 0.99f) return 1.0f;
+    return t;
+}
+
+// Плавний підхід до цілі: крок 1..5% за виклик (виклики кожні 0.5 с), мертва зона проти тремтіння.
+// На краях діапазону (t = 0 або 1) мертва зона менша, щоб точно виходити на задані мін/макс.
+int approachBrightness(int current, float target, float t) {
+    if (current < 0) return (int)lroundf(target);
+    float dead = (t <= 0.0f || t >= 1.0f) ? 0.5f : 1.5f;
+    float diff = target - current;
+    if (fabsf(diff) < dead) return current;
+    int step = constrain((int)lroundf(fabsf(diff) / 4.0f), 1, 5);
+    return current + (diff > 0 ? step : -step);
+}
+
+// Режим 3 "Автояскравість": плавно від сенсора
+bool isSmoothBrightnessActive() {
+    return settings.getInt(BRIGHTNESS_MODE) == 3 && lightSensor.isLightSensorAvailable();
+}
+
+// Режими 2 і 3 працюють з трьома яскравостями (велика / мала день / мала ніч)
+bool isSensorBrightnessMode() {
+    int mode = settings.getInt(BRIGHTNESS_MODE);
+    return (mode == 2 || mode == 3) && lightSensor.isLightSensorAvailable();
+}
+
+// Мала яскравість за годинником: денна або нічна
+int getSmallBrightnessByTime() {
+    return isItNightNow() ? settings.getInt(BRIGHTNESS_SMOOTH_MIN_NIGHT) : settings.getInt(BRIGHTNESS_SMOOTH_MIN_DAY);
+}
+
+// Яскравість мапи у плавному режимі: між "малою" (вдень/вночі за годинником) і "великою". -1 - ще немає даних
+int getSmoothSensorBrightness() {
+    static int output = -1;
+    float t = getSmoothedLightFraction();
+    if (isnan(t)) return output;
+
+    int maxBr = settings.getInt(BRIGHTNESS_SMOOTH_MAX);
+    int minBr = getSmallBrightnessByTime();
+    if (minBr > maxBr) minBr = maxBr;
+    float target = minBr + (maxBr - minBr) * t;
+
+    bool first = output < 0;
+    output = approachBrightness(output, target, t);
+    // Зверху обмежуємо одразу (зменшили "велику" - реагуємо миттєво); знизу не обмежуємо,
+    // щоб на межі дня/ночі "мала" яскравість змінювалась плавно, а не стрибком
+    output = constrain(output, 0, maxBr);
+    if (first) {
+        LOG.printf("[BRIGHTNESS] Smooth initial: %.0f%% of light range -> %d%% (min %d%%, max %d%%)\n",
+                   t * 100.0f, output, minBr, maxBr);
+    }
+    return output;
+}
+
+int currentDisplayBrightness = -1;
+
+// Яскравість дисплея: фіксована або (автояскравість) між мінімальною і заданою залежно від освітлення
+void displayBrightnessProcess() {
+    static int output = -1;
+    int maxBr = constrain(settings.getInt(DISPLAY_BRIGHTNESS), 1, 100);
+    bool autoBr = settings.getBool(DISPLAY_AUTO_BRIGHTNESS);
+
+    // Поки налаштування не чіпали (100%, без авто) - не втручаємось, лишається заводський контраст дисплея
+    if (output < 0 && !autoBr && maxBr >= 100) return;
+
+    float target = maxBr;
+    float t = 1.0f;
+    if (autoBr) {
+        float ft = getSmoothedLightFraction();
+        if (!isnan(ft)) {
+            t = ft;
+            int minBr = constrain(min(settings.getInt(DISPLAY_BRIGHTNESS_MIN), maxBr), 1, 100);
+            target = minBr + (maxBr - minBr) * t;
+        }
+    }
+    output = constrain(approachBrightness(output, target, t), 1, maxBr);
+    if (output != currentDisplayBrightness) {
+        currentDisplayBrightness = output;
+        display.setBrightness(output);
+    }
+}
+
+// Утримуємо порядок: мала ніч <= мала день <= велика; мінімум дисплея <= яскравість дисплея.
+// Збереження залежного значення знову викликає callback, тому ланцюжок (велика -> день -> ніч) відпрацьовує сам
+void enforceBrightnessOrder(Type type) {
+    switch (type) {
+        case BRIGHTNESS_SMOOTH_MAX:
+        case BRIGHTNESS_SMOOTH_MIN_DAY: {
+            int maxBr = settings.getInt(BRIGHTNESS_SMOOTH_MAX);
+            int dayBr = settings.getInt(BRIGHTNESS_SMOOTH_MIN_DAY);
+            if (dayBr > maxBr) {
+                settings.saveInt(BRIGHTNESS_SMOOTH_MIN_DAY, maxBr);
+                return; // далі відпрацює виклик для MIN_DAY
+            }
+            if (settings.getInt(BRIGHTNESS_SMOOTH_MIN_NIGHT) > dayBr) settings.saveInt(BRIGHTNESS_SMOOTH_MIN_NIGHT, dayBr);
+            break;
+        }
+        case BRIGHTNESS_SMOOTH_MIN_NIGHT:
+            if (settings.getInt(BRIGHTNESS_SMOOTH_MIN_NIGHT) > settings.getInt(BRIGHTNESS_SMOOTH_MIN_DAY)) {
+                settings.saveInt(BRIGHTNESS_SMOOTH_MIN_NIGHT, settings.getInt(BRIGHTNESS_SMOOTH_MIN_DAY));
+            }
+            break;
+        case DISPLAY_BRIGHTNESS:
+        case DISPLAY_BRIGHTNESS_MIN:
+            if (settings.getInt(DISPLAY_BRIGHTNESS_MIN) > settings.getInt(DISPLAY_BRIGHTNESS)) {
+                settings.saveInt(DISPLAY_BRIGHTNESS_MIN, settings.getInt(DISPLAY_BRIGHTNESS));
+            }
+            break;
+        default:
+            break;
+    }
+}
+// [lux] ===== кінець блоку плавної яскравості =====
+
 uint8_t getCurrentBrightnes() {
 
     // якщо нічний режим увімкнений, повертаємо нічну яскравість незалежно від інших налаштувань
+    // [lux] у режимах "Сенсор освітлення" і "Автояскравість" нічною вважається "мала яскравість ніч"
     if (nightMode) {
-        return settings.getInt(BRIGHTNESS_NIGHT);
+        return isSensorBrightnessMode() ? settings.getInt(BRIGHTNESS_SMOOTH_MIN_NIGHT) : settings.getInt(BRIGHTNESS_NIGHT);
     }
     // режим яскравості 0: завжди використовувати основну яскравість
     if (settings.getInt(BRIGHTNESS_MODE) == 0) {
@@ -2032,6 +2193,11 @@ uint8_t getCurrentBrightnes() {
             timeNightActive = isNight;
         }
         return isNight ? settings.getInt(BRIGHTNESS_NIGHT) : settings.getInt(BRIGHTNESS_DAY);
+    }
+    // [lux] режим яскравості 3 "Автояскравість": плавно між малою (день/ніч за годинником) і великою залежно від освітлення
+    if (isSmoothBrightnessActive()) {
+        int smooth = getSmoothSensorBrightness();
+        if (smooth >= 0) return smooth;
     }
     // режим яскравості 2: використовувати денну або нічну яскравість залежно від рівня освітлення (якщо є датчик освітлення)
     if (settings.getInt(BRIGHTNESS_MODE) == 2 && lightSensor.isLightSensorAvailable()) {
@@ -2063,7 +2229,8 @@ uint8_t getCurrentBrightnes() {
                            lightLevel, threshold, dayThreshold);
                 sensorStateLogged = true;
             }
-            return sensorNightActive ? settings.getInt(BRIGHTNESS_NIGHT) : settings.getInt(BRIGHTNESS_DAY);
+            // [lux] темно -> мала яскравість (денна або нічна за годинником), світло -> велика
+            return sensorNightActive ? getSmallBrightnessByTime() : settings.getInt(BRIGHTNESS_SMOOTH_MAX);
         }
         // Датчик визначився, але показання невалідне - інакше мовчки віддали б основну яскравість.
         // Логуємо один раз, а не двічі на секунду, і знову дозволяємо лог після відновлення сенсора
@@ -2106,7 +2273,7 @@ void initSettings() {
     LOG.printf("[INIT] Init settings\n");
     settings.init();
     fwUpdate.init(VERSION);
-    fwUpdate.applyActiveChannel(settings.getInt(FW_UPDATE_CHANNEL) == 1);
+    fwUpdate.applyActiveChannel(settings.getInt(FW_UPDATE_CHANNEL));
     
     // Перевіряємо чи є збережене значення hostname
     if (!settings.hasKey(BROADCAST_NAME)) {
@@ -2121,6 +2288,9 @@ void initSettings() {
     
     // Реєструємо callback для автоматичного broadcast змін налаштувань до API
     settings.setChangeCallback([](Type type, int intValue, float fltValue, const char* strValue) {
+
+        // [lux] утримуємо порядок яскравостей (мала ніч <= мала день <= велика, мін. дисплея <= дисплей)
+        enforceBrightnessOrder(type);
       
         // Повідомляємо mDNS про зміни налаштувань
         mdnsService.onSettingsChange(type, intValue, fltValue, strValue);
@@ -2194,6 +2364,10 @@ void initSettings() {
             case BRIGHTNESS_DAY:
             case BRIGHTNESS_NIGHT:
             case BRIGHTNESS_MODE:
+            case BRIGHTNESS_SMOOTH_MAX:        // [lux]
+            case BRIGHTNESS_SMOOTH_MIN_DAY:    // [lux]
+            case BRIGHTNESS_SMOOTH_MIN_NIGHT:  // [lux]
+            case LIGHT_SENSOR_FACTOR:          // [lux]
             // Додатково перераховуємо CURRENT_BRIGHTNESS
                 brightnessProcess();
             case DAY_START:
@@ -2217,12 +2391,20 @@ void initSettings() {
             case BIND_BG_BRIGHTNESS:
             case BRIGHTNESS_ANIMATION_END:
             case BRIGHTNESS_LAMP:
+            case BIND_LAMP_BRIGHTNESS:
             case BRIGHTNESS_SERVICE:
                 adaptStripColorsAndBrightness();
                 handleAdaptAnimationColors();
                 handleAdaptAnimationBrightness();
                 break;
             
+            // [lux] Яскравість дисплея
+            case DISPLAY_BRIGHTNESS:
+            case DISPLAY_AUTO_BRIGHTNESS:
+            case DISPLAY_BRIGHTNESS_MIN:
+                displayBrightnessProcess();
+                break;
+
             // Час анімацій
             case ANIMATION_ALERT_ON_CYCLE_TIME:
             case ANIMATION_ALERT_OFF_CYCLE_TIME:
@@ -2398,7 +2580,7 @@ void initSettings() {
             // Зміна каналу оновлення прошивки — перераховуємо стан з уже отриманих списків
             case NEW_FW_NOTIFICATION:
             case FW_UPDATE_CHANNEL:
-                fwUpdate.applyActiveChannel(settings.getInt(FW_UPDATE_CHANNEL) == 1);
+                fwUpdate.applyActiveChannel(settings.getInt(FW_UPDATE_CHANNEL));
                 break;
 
             default:
@@ -2956,6 +3138,7 @@ void websocketProcess() {
         if ((!wsLostShown || !wsLostWifi) && millis() - wifiDownAt > WS_LOST_AFTER_MS) showConnectionLost(true);
         return;
     }
+    fwUpdate.processCustomChannel(true);  // [rsa_lux] перевірка маніфесту неофіційного каналу
     if (wifiWasDown) { wifiWasDown = false; wifiBackAt = millis(); wifiBackValid = true; }
     //if (millis() - websocketLastPingTime > 30000 && !websocketReconnect) {
     bool connected = websocket.available(); // може сам викликати ConnectionClosed і запланувати затримку
@@ -3208,7 +3391,7 @@ void reconfigureAll() {
     handleUpdateHomeAlertBit();
     
     // Оновлення каналу прошивки
-    fwUpdate.applyActiveChannel(settings.getInt(FW_UPDATE_CHANNEL) == 1);
+    fwUpdate.applyActiveChannel(settings.getInt(FW_UPDATE_CHANNEL));
     
     // Оновлення режиму логування
     loggingStream.setLogsEnabled(settings.getBool(LOGS_ENABLED));
@@ -3256,6 +3439,14 @@ void handleUpdateHomeAlertBit() {
                           ? temperatureFlat[homeTempIdx] : 0x00;
     int homeTemp = decodeTemperature(encodedTemp);
     api.setHomeDistrictTemp(homeTemp);
+    updateHomeEnergyRadiation(); // [lux3]
+}
+
+// [lux3] Стан енергосистеми і рівень радіації домашнього регіону -> Home Assistant
+void updateHomeEnergyRadiation() {
+    int idx = getRegionFlatIdx(settings.getInt(HOME_DISTRICT));
+    bool valid = idx >= 0 && idx < (int)(MAX_REGIONS + 1);
+    api.setHomeEnergyRadiation(valid ? energyFlat[idx] : 0, valid ? radiationFlat[idx] : 0);
 }
 
 void handleUpdateTimezone() {
@@ -3338,8 +3529,8 @@ void requestFirmwareUpdate(const char* firmwareId) {
     }
     
     // Встановлюємо ID прошивки для завантаження
-    bool isBeta = settings.getInt(FW_UPDATE_CHANNEL) == 1;
-    if (!fwUpdate.requestUpdate(versionToUse, isBeta)) {
+    int channel = settings.getInt(FW_UPDATE_CHANNEL);
+    if (!fwUpdate.requestUpdate(versionToUse, channel)) {
         LOG.printf("[FIRMWARE] Invalid firmware ID: %s\n", versionToUse);
         return;
     }
@@ -3372,12 +3563,16 @@ void brightnessProcess() {
     // if auto brightness set to day/night mode, check current hour and choose brightness
     uint8_t currentBrightness = getCurrentBrightnes();
     if (settings.getInt(CURRENT_BRIGHTNESS) != currentBrightness) {
-        settings.saveInt(CURRENT_BRIGHTNESS, currentBrightness);
+        // [lux] у плавному режимі яскравість змінюється часто - тримаємо лише в RAM, щоб не зношувати флеш (NVS)
+        settings.saveInt(CURRENT_BRIGHTNESS, currentBrightness, !isSmoothBrightnessActive());
         LOG.printf("[BRIGHTNESS] Setting current_brightness to %d\n", currentBrightness);
         adaptStripColorsAndBrightness();     
         handleAdaptAnimationColors();
         handleAdaptAnimationBrightness();
     }
+    // [lux] яскравість дисплея і поточний стан для Home Assistant
+    displayBrightnessProcess();
+    api.setBrightnessState(settings.getInt(CURRENT_BRIGHTNESS), currentDisplayBrightness);
 }
 
 // --- Battery Monitor Process ---
@@ -3573,7 +3768,10 @@ void displayProcess()
     }
 
     // Turn off display at night if setting enabled (Priority - highest)
-    if (settings.getBool(DISPLAY_OFF_AT_NIGHT) && isItNightNow() && !display.isServiceMessageActive()) {
+    // [lux] Режим мапи "Лампа" вмикає дисплей, вимкнений вночі за часом; після виходу з режиму лампи
+    // умова знову виконується, і дисплей гаситься сам. Ручне вимкнення дисплея (isDisplayOff) лампа не чіпає
+    bool lampKeepsDisplayOn = getCurrentMapMode() == MapModes::LAMP;
+    if (settings.getBool(DISPLAY_OFF_AT_NIGHT) && isItNightNow() && !lampKeepsDisplayOn && !display.isServiceMessageActive()) {
         display.clear();
         return;
     }
@@ -3695,6 +3893,12 @@ void rebuildSensorsListItems() {
         bool sensorAvailable = lightSensor.isAnySensorAvailable();
         lightSensorOption->ignore = !sensorAvailable;
         lightSensorOption->showDisabled = !sensorAvailable;
+    }
+    SettingListItem* autoBrightnessOption = getSettingItemById(AUTO_BRIGHTNESS_MODES, AUTO_BRIGHTNESS_OPTIONS_COUNT, 3); // [lux] Автояскравість
+    if (autoBrightnessOption != nullptr) {
+        bool sensorAvailable = lightSensor.isLightSensorAvailable();
+        autoBrightnessOption->ignore = !sensorAvailable;
+        autoBrightnessOption->showDisabled = !sensorAvailable;
     }
     SettingListItem* climateSensorOption = getSettingItemById(DISPLAY_MODES, DISPLAY_MODES_COUNT, 4); // Мікроклімат
     if (climateSensorOption != nullptr) {
