@@ -17,6 +17,15 @@ uint8_t JaamLed::brightnessRelative(uint8_t percentLocal) {
     return brightnessMapped(combinedPercent);
 }
 
+// [lux] Яскравість режиму "Лампа". Перемикач "Прив'язати яскравість лампи до загальної яскравості":
+// увімкнений (за замовчуванням) - лампа відносна до загальної яскравості мапи, як в офіційній прошивці;
+// вимкнений - лампа бере яскравість лише з власного повзунка (режими яскравості мапи її не змінюють).
+uint8_t JaamLed::lampBrightness() {
+    uint8_t percent = settings.getInt(BRIGHTNESS_LAMP);
+    if (settings.getBool(BIND_LAMP_BRIGHTNESS)) return brightnessRelative(percent);
+    return brightnessMapped(percent);
+}
+
 uint8_t JaamLed::homeDistrictBrightness(uint8_t baseBrightness) {
     if (settings.getBool(BIND_HOME_DISTRICT_BRIGHTNESS)) {
         return brightnessRelative(settings.getInt(BRIGHTNESS_HOME_DISTRICT)); // відносна до загальної, замінює яскравість типу тривоги

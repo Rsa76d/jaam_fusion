@@ -34,6 +34,7 @@ extern void requestRecalculateLeds();
 extern void requestAdaptColors();
 extern void requestToRegenerateBgColorMap();
 extern void requestWebsocketReconnect();
+extern void handleReconnectWebsocket(bool resetBackoff);
 extern void requestReconfigureAll();
 extern void requestRebootDevice();
 
@@ -229,6 +230,13 @@ static const ParamMapping ALL_PARAM_MAPPINGS[] = {
     // Brightness
     {"brightness_mode", BRIGHTNESS_MODE, TYPE_INT},
     {"night_mode_light_threshold", NIGHT_MODE_LIGHT_THRESHOLD, TYPE_INT},
+    {"brightness_smooth_max", BRIGHTNESS_SMOOTH_MAX, TYPE_INT},                // [lux]
+    {"brightness_smooth_min_day", BRIGHTNESS_SMOOTH_MIN_DAY, TYPE_INT},        // [lux]
+    {"brightness_smooth_min_night", BRIGHTNESS_SMOOTH_MIN_NIGHT, TYPE_INT},    // [lux]
+    {"light_sensor_factor", LIGHT_SENSOR_FACTOR, TYPE_FLOAT},                  // [lux]
+    {"display_brightness", DISPLAY_BRIGHTNESS, TYPE_INT},                      // [lux]
+    {"display_auto_brightness", DISPLAY_AUTO_BRIGHTNESS, TYPE_BOOL},           // [lux]
+    {"display_brightness_min", DISPLAY_BRIGHTNESS_MIN, TYPE_INT},              // [lux]
     {"brightness", BRIGHTNESS, TYPE_INT},
     {"brightness_day", BRIGHTNESS_DAY, TYPE_INT},
     {"brightness_night", BRIGHTNESS_NIGHT, TYPE_INT},
@@ -245,6 +253,7 @@ static const ParamMapping ALL_PARAM_MAPPINGS[] = {
     {"brightness_bg", BRIGHTNESS_BG, TYPE_INT},
     {"bind_bg_brightness", BIND_BG_BRIGHTNESS, TYPE_BOOL},
     {"brightness_lamp", BRIGHTNESS_LAMP, TYPE_INT},
+    {"bind_lamp_brightness", BIND_LAMP_BRIGHTNESS, TYPE_BOOL},
     {"brightness_service", BRIGHTNESS_SERVICE, TYPE_INT},
     {"brightness_animation_end", BRIGHTNESS_ANIMATION_END, TYPE_INT},
     
@@ -1504,7 +1513,7 @@ void JaamWeb::handleSaveMap() {
         server.sendHeader("Location", "/map-editor", true);
         requestRecalculateLeds();
         requestAdaptColors();
-        requestWebsocketReconnect();
+        handleReconnectWebsocket(true); // дія користувача: без очікування backoff
         server.send(303);
     } else {
         LOG.printf("[WEB] Custom map saving error.\n");
@@ -1827,6 +1836,18 @@ void JaamWeb::buildUiSchemaDropdownLists(JsonDocument& doc) {
         JsonArray arr = dropdownLists["fw_update_channel_options"].to<JsonArray>();
         JsonArray opt0 = arr.add<JsonArray>(); opt0.add(0); opt0.add("Prod"); opt0.add(0);
         JsonArray opt1 = arr.add<JsonArray>(); opt1.add(1); opt1.add("Beta"); opt1.add(0);
+        JsonArray opt2 = arr.add<JsonArray>(); opt2.add(2); opt2.add("rsa_lux"); opt2.add(0);
+    }
+    {
+        // [rsa_lux] Неофіційний канал: єдина версія з маніфесту (порожньо, поки маніфест не отримано)
+        JsonArray arr = dropdownLists["firmware_versions_rsa"].to<JsonArray>();
+        const char* v = fwUpdate.getCustomVersion();
+        if (v != nullptr && v[0] != '\0') {
+            JsonArray option = arr.add<JsonArray>();
+            option.add(v);
+            option.add(v);
+            option.add(0);
+        }
     }
 }
 

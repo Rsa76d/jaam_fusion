@@ -363,7 +363,7 @@ extern const TimezoneInfo TIMEZONE_OFFSETS[TIMEZONES_COUNT];
 constexpr int DISPLAY_MODES_COUNT = 8;
 extern SettingListItem DISPLAY_MODES[DISPLAY_MODES_COUNT];
 
-constexpr int AUTO_BRIGHTNESS_OPTIONS_COUNT = 3;
+constexpr int AUTO_BRIGHTNESS_OPTIONS_COUNT = 4;
 extern SettingListItem AUTO_BRIGHTNESS_MODES[AUTO_BRIGHTNESS_OPTIONS_COUNT];
 
 constexpr int BG_LED_MODES_COUNT = 3;
@@ -637,6 +637,7 @@ enum Type {
     TRACK_ON_RECON_DRONES,
     COLOR_LAMP,
     BRIGHTNESS_LAMP,
+    BIND_LAMP_BRIGHTNESS, // [lux] прив'язати яскравість лампи до загальної яскравості мапи
     API_ENABLED,
     API_PORT,
     BRIGHTNESS_MAX,
@@ -652,6 +653,14 @@ enum Type {
     SOUND_ON_ALERT_LOW,
     MELODY_ON_ALERT_LOW,
     TRACK_ON_ALERT_LOW,
+    // [lux] Три яскравості для режимів "Сенсор освітлення" (ступінчасто) і "Автояскравість" (плавно)
+    BRIGHTNESS_SMOOTH_MAX,         // % - велика яскравість (яскраве освітлення)
+    BRIGHTNESS_SMOOTH_MIN_DAY,     // % - мала яскравість вдень (темрява, денні години)
+    BRIGHTNESS_SMOOTH_MIN_NIGHT,   // % - мала яскравість вночі (темрява, нічні години)
+    // [lux] Яскравість дисплея
+    DISPLAY_BRIGHTNESS,            // % - яскравість дисплея (у режимі автояскравості - максимальна)
+    DISPLAY_AUTO_BRIGHTNESS,       // 0/1 - автояскравість дисплея від сенсора освітлення
+    DISPLAY_BRIGHTNESS_MIN,        // % - мінімальна яскравість дисплея в режимі автояскравості
 };
 
 // --- Адміністративні одиниці України (області + обласні центри + м. Київ + АР Крим) ---

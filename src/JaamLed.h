@@ -26,6 +26,8 @@ public:
     
     // Convert percentage to 0-255 scale
     static uint8_t brightnessRelative(uint8_t percentLocal);
+    // [lux] Яскравість режиму "Лампа": відносна до загальної або лише власний повзунок - за перемикачем BIND_LAMP_BRIGHTNESS
+    static uint8_t lampBrightness();
     static uint8_t brightnessParabolic(uint8_t percent);
     static uint8_t brightnessMapped(uint8_t percent);
     static uint8_t homeDistrictBrightness(uint8_t baseBrightness);

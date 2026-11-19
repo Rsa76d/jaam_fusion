@@ -5,6 +5,7 @@
 #include <algorithm>
 
 #include "JaamWifi.h"
+#include "JaamBackoff.h"
 #include <WiFiClientSecure.h>
 #include <NTPtime.h>
 
@@ -57,12 +58,13 @@ bool getEventAnimationParams(int8_t eventType, uint16_t& animType, uint32_t& col
 void triggerHomeAlertAnimation(int8_t bit);
 void handleUpdateTimezone();
 void handleUpdateNtpHost();
-void handleReconnectWebsocket();
+void handleReconnectWebsocket(bool resetBackoff = true);
 void handleRegenerateBgColorMap();
 void requestPlayTestMelody(int melodyId);
 void requestPlayTestTrack(int trackId);
 void requestReconfigureAll();
 void requestWebsocketReconnect();
+void scheduleReconnect(bool policyClose);
 void requestFirmwareUpdate(const char* firmwareId = nullptr);
 void requestRecalculateLeds();
 void requestAdaptColors();
@@ -70,6 +72,9 @@ void requestRebootDevice();
 void requestToRegenerateBgColorMap();
 void displayProcess();
 void brightnessProcess();
+void updateHomeEnergyRadiation();                     // [lux3]
+void displayBrightnessProcess();                       // [lux]
+void enforceBrightnessOrder(Type type);                // [lux]
 void rebuildSensorsListItems();
 bool isButtonActivated();
 
@@ -153,7 +158,16 @@ bool                isFirstDataFetchCompleted = false;
 bool                startup = true;
 bool                websocketConnected;
 bool                websocketReconnect = false;
+bool                wsLostWifi = false;                   // сповіщення викликане відсутністю Wi-Fi (інші кольори/текст)
+bool                wsClearLostAnim = false;              // індикацію втрати знімаємо з першим пакетом даних, а не з підключенням
+bool                wsLostShown = false;                  // показано сповіщення "немає зв'язку" (мапи очищено, біжить анімація)
 time_t              lastWebsocketConnectTime = 0;
+uint32_t            wsNextConnectAt = 0;                  // millis(), раніше цього часу не підключаємось
+bool                wsBackoffActive = false;              // wsNextConnectAt чинний (інакше він міг застаріти понад 24 доби і порівняння хибне)
+uint32_t            wsReconnectDelayMs = WS_RECONNECT_MIN_MS;
+uint16_t            wsAttempt = 0;                        // спроб підключення від останнього успіху (для екрана)
+uint32_t            wsConnectedAt = 0;                    // 0 - зараз не підключені
+bool                wsManualReconnect = false;            // закриття ініційоване нами, backoff не рахуємо
 
 // --- OTHER Configuration ---
 bool                minuteOfSilence = false;
@@ -1093,8 +1107,7 @@ void onMessageCallback(WebsocketsMessage msg) {
         size_t count = bodyLen / RECORD_SZ;
         const uint8_t* ptr = data + HEADER_SZ;
 
-        LOG.printf("[WEBSOCKET] TYPE_NOTIFICATIONS_BATCH data processing\n");
-
+        size_t notMapped = 0;
         for (size_t i = 0; i < count; ++i) {
             uint16_t region_id = uint16_t(ptr[0]) | (uint16_t(ptr[1]) << 8);
             uint16_t flags16   = uint16_t(ptr[2]) | (uint16_t(ptr[3]) << 8);
@@ -1102,10 +1115,9 @@ void onMessageCallback(WebsocketsMessage msg) {
 
             const RegionLedMapMeta* meta = getRegionEntry(region_id);
             if (!meta) {
-                LOG.printf("[WEBSOCKET] notification region %d:\t\t0x%04X skipped - not in map\n", region_id, flags16);
+                notMapped++;
                 continue;
             }
-            LOG.printf("[WEBSOCKET] notification region %d:\t\t0x%04X\n", region_id, flags16);
 
             // Знаходимо поточний найвищий alert-bit для LEDs цього регіону з кешу
             // (без heap — ledBitCache вже містить актуальний стан після ALERTS_BATCH)
@@ -1122,7 +1134,6 @@ void onMessageCallback(WebsocketsMessage msg) {
 
             // Notification bit — false: не вимагати наявності bit 0 (air alert)
             int actualBitDiff = findHighestExistingAndEnabledBit(flags16, false);
-            LOG.printf("[WEBSOCKET]   highestBitRegion %d, actualBitDiff %d\n", highestBitRegion, actualBitDiff);
 
             // Анімуємо тільки якщо нотифікація має вищий пріоритет, ніж поточна тривога
             if (hasHigherPriority(actualBitDiff, highestBitRegion)) {
@@ -1139,6 +1150,7 @@ void onMessageCallback(WebsocketsMessage msg) {
                 }
             }   
         }
+        LOG.printf("[WEBSOCKET] TYPE_NOTIFICATIONS_BATCH: %u regions, %u not in map\n", (unsigned)count, (unsigned)notMapped);
     }
 
 
@@ -1172,7 +1184,15 @@ void onMessageCallback(WebsocketsMessage msg) {
         size_t count = bodyLen / RECORD_SZ;
         const uint8_t* ptr = data + HEADER_SZ + HASH_SZ;
 
+        // Перший пакет сеансу - повний стан, але сервер шле лише регіони з тривогою: без очищення тривоги,
+        // зняті під час тихого реконекту (мапу тоді не очищено), лишились би на мапі назавжди.
+        // ledBitCache перебудовується з alertsFlat в init-обробці нижче.
+        if (!isFirstDataFetchCompleted) {
+            memset(alertsFlat, 0, sizeof(alertsFlat));
+        }
+
         // ── Фаза 1: оновити alertsFlat, позначити dirty LED ──────────────────
+        size_t notMapped = 0, changed = 0;
         for (size_t i = 0; i < count; ++i) {
             uint16_t region_id = uint16_t(ptr[0]) | (uint16_t(ptr[1]) << 8);
             uint16_t flags16   = uint16_t(ptr[2]) | (uint16_t(ptr[3]) << 8);
@@ -1181,21 +1201,19 @@ void onMessageCallback(WebsocketsMessage msg) {
             // getRegionEntry перевіряє наявність у currentMap (region_id — довільний ID, не індекс)
             const RegionLedMapMeta* meta = getRegionEntry(region_id);
             if (!meta) {
-                LOG.printf("[WEBSOCKET] alert region %d:\t\t0x%04X skipped - not in map\n", region_id, flags16);
+                notMapped++;
                 continue;
             }
             int flat_idx = getRegionFlatIdx(region_id);  // позиція в currentMap.meta (0..currentMap.size-1)
             if (flat_idx < 0 || flat_idx >= (int)(MAX_REGIONS + 1)) {
-                LOG.printf("[WEBSOCKET] alert region %d:\t\t0x%04X skipped - invalid flat_idx %d\n",
-                        region_id, flags16, flat_idx);
+                LOG.printf("[WEBSOCKET] alert region %d: invalid flat_idx %d\n", region_id, flat_idx);
                 continue;
             }
 
             if (alertsFlat[flat_idx] == flags16) {
                 continue; // нічого не змінилось
             }
-            LOG.printf("[WEBSOCKET] alert region %d:\t\t0x%04X -> 0x%04X\n",
-                       region_id, alertsFlat[flat_idx], flags16);
+            changed++;
 
             // Позначаємо dirty LED (бітсет: 1 bit на LED, без зайвого масиву s_ledOldBit)
             // ledBitCache[led] ще не змінюється до фази 2 — тому він є "старим" значенням
@@ -1208,6 +1226,9 @@ void onMessageCallback(WebsocketsMessage msg) {
 
             alertsFlat[flat_idx] = flags16; // оновлюємо одразу
         }
+
+        LOG.printf("[WEBSOCKET] TYPE_ALERTS_BATCH: %u regions, %u changed, %u not in map\n",
+                   (unsigned)count, (unsigned)changed, (unsigned)notMapped);
 
         // ── Фаза 2: обчислити нові біти і запустити анімації ─────────────────
         if (isFirstDataFetchCompleted) {
@@ -1222,8 +1243,6 @@ void onMessageCallback(WebsocketsMessage msg) {
                 if (newBit == oldBit) continue; // bit не змінився
 
                 bool increase = hasHigherPriority((int)newBit, (int)oldBit);
-                LOG.printf("[WEBSOCKET] LED %d: bit %d -> %d (%s), region %d\n",
-                           led, oldBit, newBit, increase ? "increase" : "decrease", new_region);
                 animateLed(strip_main, MapModes::ALERT, led, (int)newBit, (int)oldBit, new_region, increase);
 
                 ledBitCache[led] = newBit;
@@ -1255,6 +1274,10 @@ void onMessageCallback(WebsocketsMessage msg) {
         // ── Init-fetch: перший пакет після підключення ────────────────────────
         if (!isFirstDataFetchCompleted) {
             LOG.printf("[WEBSOCKET] TYPE_ALERTS_BATCH init processing\n");
+            if (wsClearLostAnim) {
+                animation.clearAllAnimations();
+                wsClearLostAnim = false;
+            }
 
             // Заповнюємо кеш після першого повного стану
             rebuildLedBitCache();
@@ -1314,7 +1337,7 @@ void onMessageCallback(WebsocketsMessage msg) {
         // Розбираємо count записів по RECORD_LZ
         const uint8_t* ptr = data + HEADER_SZ;
 
-        LOG.printf("[WEBSOCKET] TYPE_WEATHER_BATCH data processing\n");
+        LOG.printf("[WEBSOCKET] TYPE_WEATHER_BATCH: %u regions\n", (unsigned)count);
 
         memset(temperatureFlat, TEMP_NO_DATA, sizeof(temperatureFlat)); // очищаємо попередні дані
 
@@ -1323,7 +1346,6 @@ void onMessageCallback(WebsocketsMessage msg) {
             uint8_t flags8 = ptr[2]; // flags8 займає 1 байт
             int idx = getRegionFlatIdx(region_id);
             if (idx >= 0 && idx < (int)(MAX_REGIONS + 1)) temperatureFlat[idx] = flags8; // Зберігаємо температуру для регіону
-            LOG.printf("[WEBSOCKET] weather region %u:\tflags8=%u\n", region_id, flags8);
             ptr += RECORD_LZ; // перехід до наступного запису (2B region_id + 1B flags8)
         }
 
@@ -1405,7 +1427,7 @@ void onMessageCallback(WebsocketsMessage msg) {
         size_t count = bodyLen / RECORD_LZ;
         const uint8_t* ptr = data + HEADER_SZ;
 
-        LOG.printf("[WEBSOCKET] TYPE_ENERGY_BATCH data processing\n");
+        LOG.printf("[WEBSOCKET] TYPE_ENERGY_BATCH: %u regions\n", (unsigned)count);
 
         memset(energyFlat, 0, sizeof(energyFlat));
 
@@ -1414,11 +1436,11 @@ void onMessageCallback(WebsocketsMessage msg) {
             uint8_t status = ptr[2]; // статус займає 1 байт
             int idx = getRegionFlatIdx(region_id);
             if (idx >= 0 && idx < (int)(MAX_REGIONS + 1)) energyFlat[idx] = status;
-            LOG.printf("[WEBSOCKET] energy region %u:\tstatus=%u\n", region_id, status);
             ptr += RECORD_LZ;
         }
 
         adaptStripColorsAndBrightness();
+        updateHomeEnergyRadiation(); // [lux3]
     }
 
     if(type == TYPE_RADIATION_BATCH) {
@@ -1435,7 +1457,7 @@ void onMessageCallback(WebsocketsMessage msg) {
         size_t count = bodyLen / RECORD_SZ;
         const uint8_t* ptr = data + HEADER_SZ;
 
-        LOG.printf("[WEBSOCKET] TYPE_RADIATION_BATCH data processing\n");
+        LOG.printf("[WEBSOCKET] TYPE_RADIATION_BATCH: %u regions\n", (unsigned)count);
 
         memset(radiationFlat, 0, sizeof(radiationFlat));
 
@@ -1444,11 +1466,11 @@ void onMessageCallback(WebsocketsMessage msg) {
             uint16_t value = uint16_t(ptr[2]) | (uint16_t(ptr[3]) << 8); // значення займає 2 байти
             int idx = getRegionFlatIdx(region_id);
             if (idx >= 0 && idx < (int)(MAX_REGIONS + 1)) radiationFlat[idx] = value;
-            LOG.printf("[WEBSOCKET] radiation region %u:\tvalue=%u\n", region_id, value);
             ptr += RECORD_SZ;
         }
 
         adaptStripColorsAndBrightness();
+        updateHomeEnergyRadiation(); // [lux3]
     }
 
     checkFreeHeap("Websockets data processing");
@@ -1510,7 +1532,11 @@ void onEventsCallback(WebsocketsEvent event, String data) {
         //websocket.close();
         auto reason = websocket.getCloseReason();
         logWebsocketCloseReason(reason);
-        delay(500);
+        if (wsManualReconnect) {
+            wsManualReconnect = false;
+        } else if (wsConnectedAt != 0) {
+            scheduleReconnect(reason == websockets::CloseReason_PolicyViolation);
+        }
         LOG.printf("[MEMORY] Heap after close: %u\n", ESP.getFreeHeap());
     } else if (event == WebsocketsEvent::GotPing) {
         LOG.printf("[WEBSOCKET] ping, payload: [%s], len: %d\n", data.c_str(), data.length());
@@ -1520,10 +1546,27 @@ void onEventsCallback(WebsocketsEvent event, String data) {
     }
 }
 
+// Плануємо наступну спробу підключення (backoff + jitter, див. JaamBackoff.h)
+void scheduleReconnect(bool policyClose) {
+    bool stable = wsConnectedAt != 0 && millis() - wsConnectedAt >= WS_RECONNECT_STABLE_MS;
+    wsConnectedAt = 0;
+    uint32_t delayMs = wsBackoffStep(wsReconnectDelayMs, stable, policyClose, randomJitterPct());
+    wsNextConnectAt = millis() + delayMs;
+    wsBackoffActive = true;
+    LOG.printf("[WEBSOCKET] next connect attempt in %u s (stable=%d, policyClose=%d)\n", (delayMs + 500) / 1000, stable, policyClose);
+}
+
 void socketConnect() {
     LOG.printf("[WEBSOCKET] connection start...\n");
+    // Старе з'єднання (якщо є) закриється тут і не має рахуватися ще раз. Але якщо воно було стабільним
+    // (зависло після довгої роботи), backoff скидаємо тут: далі wsConnectedAt вже 0 і scheduleReconnect
+    // вважав би його нестабільним, тож затримка лишилась би високою.
+    if (wsConnectedAt != 0 && millis() - wsConnectedAt >= WS_RECONNECT_STABLE_MS) {
+        wsReconnectDelayMs = WS_RECONNECT_MIN_MS;
+    }
+    wsConnectedAt = 0;
+    wsAttempt++;
     servicePin(DATA);
-    display.showServiceMessage("підключення...", "Сервер даних");
     alertsHash = 0;
     websocket.onMessage(onMessageCallback);
     websocket.onEvent(onEventsCallback);
@@ -1540,9 +1583,13 @@ void socketConnect() {
     if (websocket.available()) {
         websocketConnected = true;
         servicePin(DATA);
-        if (websocketReconnect) {
-            animation.clearAllAnimations();
+        // Тихий реконект (мапу не очищено): новий сеанс починається з повного стану, а не з дельти до старого хешу
+        isFirstDataFetchCompleted = false;
+        wsClearLostAnim = true;
+        if (websocketReconnect || wsLostShown) {
+            // Індикацію втрати лишаємо до першого пакета даних: інакше між підключенням і даними мапа блимає порожньою
             websocketReconnect = false;
+            wsLostShown = false;
         }
         LOG.printf("[WEBSOCKET] connection time - %d ms\n", millis() - startTime);
         char chipIdInfo[25];
@@ -1566,9 +1613,11 @@ void socketConnect() {
         websocket.send(userInfo);
         websocket.ping("A");
         lastWebsocketConnectTime  = millis();
+        wsConnectedAt = lastWebsocketConnectTime ? lastWebsocketConnectTime : 1;
+        wsAttempt = 0;
         display.showServiceMessage("підключено!", "Сервер даних", 3000);
     } else {
-        display.showServiceMessage("недоступний", "Сервер даних", 3000);
+        scheduleReconnect(false);
     }
 }
 
@@ -1966,11 +2015,167 @@ void adaptStripColorsAndBrightness() {
 
 
 // --- BRIGHTNESS Functions ---
+
+// [lux] ===== Плавна яскравість від сенсора освітлення =====
+// Освітленість (з урахуванням чутливості) згладжується в логарифмічній шкалі - око сприймає світло
+// логарифмічно, а коротка тінь чи спалах не смикають яскравість. Стала часу ~3 с і не залежить від
+// частоти викликів, тому мапа і дисплей можуть брати значення в одному циклі без подвійного згладжування.
+static const float LUX_REFERENCE     = 300.0f;  // освітленість (lx) для максимуму при чутливості 1.0
+static const float LUX_SMOOTH_TAU_MS = 3000.0f; // стала часу згладжування
+
+// Частка 0..1 (0 - темрява, 1 - яскраве світло) або NAN, якщо валідних показань ще не було
+float getSmoothedLightFraction() {
+    static float smoothLog = NAN;
+    static unsigned long lastUpdate = 0;
+    static bool invalidLogged = false;
+
+    if (!lightSensor.isLightSensorAvailable()) return NAN;
+
+    float lux = lightSensor.getLightLevel();
+    unsigned long now = millis();
+    if (isnan(lux)) {
+        if (!invalidLogged) {
+            invalidLogged = true;
+            LOG.printf("[BRIGHTNESS] Smooth: light sensor gave no valid reading, holding last value\n");
+        }
+    } else {
+        invalidLogged = false;
+        if (lux < 0) lux = 0;
+        float factor = constrain(settings.getFloat(LIGHT_SENSOR_FACTOR), 0.01f, 30.0f);
+        float l = log1pf(lux * factor);
+        if (isnan(smoothLog)) {
+            smoothLog = l;
+        } else {
+            float dt = (float)(now - lastUpdate);
+            if (dt > 0) smoothLog += (1.0f - expf(-dt / LUX_SMOOTH_TAU_MS)) * (l - smoothLog);
+        }
+        lastUpdate = now;
+    }
+    if (isnan(smoothLog)) return NAN;
+    float t = smoothLog / log1pf(LUX_REFERENCE);
+    // Згладжене значення лише асимптотично наближається до країв - "прилипаємо", щоб у темряві
+    // і на яскравому світлі виходити точно на задані мін/макс, а не на 1% поруч
+    if (t < 0.01f) return 0.0f;
+    if (t > 0.99f) return 1.0f;
+    return t;
+}
+
+// Плавний підхід до цілі: крок 1..5% за виклик (виклики кожні 0.5 с), мертва зона проти тремтіння.
+// На краях діапазону (t = 0 або 1) мертва зона менша, щоб точно виходити на задані мін/макс.
+int approachBrightness(int current, float target, float t) {
+    if (current < 0) return (int)lroundf(target);
+    float dead = (t <= 0.0f || t >= 1.0f) ? 0.5f : 1.5f;
+    float diff = target - current;
+    if (fabsf(diff) < dead) return current;
+    int step = constrain((int)lroundf(fabsf(diff) / 4.0f), 1, 5);
+    return current + (diff > 0 ? step : -step);
+}
+
+// Режим 3 "Автояскравість": плавно від сенсора
+bool isSmoothBrightnessActive() {
+    return settings.getInt(BRIGHTNESS_MODE) == 3 && lightSensor.isLightSensorAvailable();
+}
+
+// Режими 2 і 3 працюють з трьома яскравостями (велика / мала день / мала ніч)
+bool isSensorBrightnessMode() {
+    int mode = settings.getInt(BRIGHTNESS_MODE);
+    return (mode == 2 || mode == 3) && lightSensor.isLightSensorAvailable();
+}
+
+// Мала яскравість за годинником: денна або нічна
+int getSmallBrightnessByTime() {
+    return isItNightNow() ? settings.getInt(BRIGHTNESS_SMOOTH_MIN_NIGHT) : settings.getInt(BRIGHTNESS_SMOOTH_MIN_DAY);
+}
+
+// Яскравість мапи у плавному режимі: між "малою" (вдень/вночі за годинником) і "великою". -1 - ще немає даних
+int getSmoothSensorBrightness() {
+    static int output = -1;
+    float t = getSmoothedLightFraction();
+    if (isnan(t)) return output;
+
+    int maxBr = settings.getInt(BRIGHTNESS_SMOOTH_MAX);
+    int minBr = getSmallBrightnessByTime();
+    if (minBr > maxBr) minBr = maxBr;
+    float target = minBr + (maxBr - minBr) * t;
+
+    bool first = output < 0;
+    output = approachBrightness(output, target, t);
+    // Зверху обмежуємо одразу (зменшили "велику" - реагуємо миттєво); знизу не обмежуємо,
+    // щоб на межі дня/ночі "мала" яскравість змінювалась плавно, а не стрибком
+    output = constrain(output, 0, maxBr);
+    if (first) {
+        LOG.printf("[BRIGHTNESS] Smooth initial: %.0f%% of light range -> %d%% (min %d%%, max %d%%)\n",
+                   t * 100.0f, output, minBr, maxBr);
+    }
+    return output;
+}
+
+int currentDisplayBrightness = -1;
+
+// Яскравість дисплея: фіксована або (автояскравість) між мінімальною і заданою залежно від освітлення
+void displayBrightnessProcess() {
+    static int output = -1;
+    int maxBr = constrain(settings.getInt(DISPLAY_BRIGHTNESS), 1, 100);
+    bool autoBr = settings.getBool(DISPLAY_AUTO_BRIGHTNESS);
+
+    // Поки налаштування не чіпали (100%, без авто) - не втручаємось, лишається заводський контраст дисплея
+    if (output < 0 && !autoBr && maxBr >= 100) return;
+
+    float target = maxBr;
+    float t = 1.0f;
+    if (autoBr) {
+        float ft = getSmoothedLightFraction();
+        if (!isnan(ft)) {
+            t = ft;
+            int minBr = constrain(min(settings.getInt(DISPLAY_BRIGHTNESS_MIN), maxBr), 1, 100);
+            target = minBr + (maxBr - minBr) * t;
+        }
+    }
+    output = constrain(approachBrightness(output, target, t), 1, maxBr);
+    if (output != currentDisplayBrightness) {
+        currentDisplayBrightness = output;
+        display.setBrightness(output);
+    }
+}
+
+// Утримуємо порядок: мала ніч <= мала день <= велика; мінімум дисплея <= яскравість дисплея.
+// Збереження залежного значення знову викликає callback, тому ланцюжок (велика -> день -> ніч) відпрацьовує сам
+void enforceBrightnessOrder(Type type) {
+    switch (type) {
+        case BRIGHTNESS_SMOOTH_MAX:
+        case BRIGHTNESS_SMOOTH_MIN_DAY: {
+            int maxBr = settings.getInt(BRIGHTNESS_SMOOTH_MAX);
+            int dayBr = settings.getInt(BRIGHTNESS_SMOOTH_MIN_DAY);
+            if (dayBr > maxBr) {
+                settings.saveInt(BRIGHTNESS_SMOOTH_MIN_DAY, maxBr);
+                return; // далі відпрацює виклик для MIN_DAY
+            }
+            if (settings.getInt(BRIGHTNESS_SMOOTH_MIN_NIGHT) > dayBr) settings.saveInt(BRIGHTNESS_SMOOTH_MIN_NIGHT, dayBr);
+            break;
+        }
+        case BRIGHTNESS_SMOOTH_MIN_NIGHT:
+            if (settings.getInt(BRIGHTNESS_SMOOTH_MIN_NIGHT) > settings.getInt(BRIGHTNESS_SMOOTH_MIN_DAY)) {
+                settings.saveInt(BRIGHTNESS_SMOOTH_MIN_NIGHT, settings.getInt(BRIGHTNESS_SMOOTH_MIN_DAY));
+            }
+            break;
+        case DISPLAY_BRIGHTNESS:
+        case DISPLAY_BRIGHTNESS_MIN:
+            if (settings.getInt(DISPLAY_BRIGHTNESS_MIN) > settings.getInt(DISPLAY_BRIGHTNESS)) {
+                settings.saveInt(DISPLAY_BRIGHTNESS_MIN, settings.getInt(DISPLAY_BRIGHTNESS));
+            }
+            break;
+        default:
+            break;
+    }
+}
+// [lux] ===== кінець блоку плавної яскравості =====
+
 uint8_t getCurrentBrightnes() {
 
     // якщо нічний режим увімкнений, повертаємо нічну яскравість незалежно від інших налаштувань
+    // [lux] у режимах "Сенсор освітлення" і "Автояскравість" нічною вважається "мала яскравість ніч"
     if (nightMode) {
-        return settings.getInt(BRIGHTNESS_NIGHT);
+        return isSensorBrightnessMode() ? settings.getInt(BRIGHTNESS_SMOOTH_MIN_NIGHT) : settings.getInt(BRIGHTNESS_NIGHT);
     }
     // режим яскравості 0: завжди використовувати основну яскравість
     if (settings.getInt(BRIGHTNESS_MODE) == 0) {
@@ -1988,6 +2193,11 @@ uint8_t getCurrentBrightnes() {
             timeNightActive = isNight;
         }
         return isNight ? settings.getInt(BRIGHTNESS_NIGHT) : settings.getInt(BRIGHTNESS_DAY);
+    }
+    // [lux] режим яскравості 3 "Автояскравість": плавно між малою (день/ніч за годинником) і великою залежно від освітлення
+    if (isSmoothBrightnessActive()) {
+        int smooth = getSmoothSensorBrightness();
+        if (smooth >= 0) return smooth;
     }
     // режим яскравості 2: використовувати денну або нічну яскравість залежно від рівня освітлення (якщо є датчик освітлення)
     if (settings.getInt(BRIGHTNESS_MODE) == 2 && lightSensor.isLightSensorAvailable()) {
@@ -2019,7 +2229,8 @@ uint8_t getCurrentBrightnes() {
                            lightLevel, threshold, dayThreshold);
                 sensorStateLogged = true;
             }
-            return sensorNightActive ? settings.getInt(BRIGHTNESS_NIGHT) : settings.getInt(BRIGHTNESS_DAY);
+            // [lux] темно -> мала яскравість (денна або нічна за годинником), світло -> велика
+            return sensorNightActive ? getSmallBrightnessByTime() : settings.getInt(BRIGHTNESS_SMOOTH_MAX);
         }
         // Датчик визначився, але показання невалідне - інакше мовчки віддали б основну яскравість.
         // Логуємо один раз, а не двічі на секунду, і знову дозволяємо лог після відновлення сенсора
@@ -2062,7 +2273,7 @@ void initSettings() {
     LOG.printf("[INIT] Init settings\n");
     settings.init();
     fwUpdate.init(VERSION);
-    fwUpdate.applyActiveChannel(settings.getInt(FW_UPDATE_CHANNEL) == 1);
+    fwUpdate.applyActiveChannel(settings.getInt(FW_UPDATE_CHANNEL));
     
     // Перевіряємо чи є збережене значення hostname
     if (!settings.hasKey(BROADCAST_NAME)) {
@@ -2077,6 +2288,9 @@ void initSettings() {
     
     // Реєструємо callback для автоматичного broadcast змін налаштувань до API
     settings.setChangeCallback([](Type type, int intValue, float fltValue, const char* strValue) {
+
+        // [lux] утримуємо порядок яскравостей (мала ніч <= мала день <= велика, мін. дисплея <= дисплей)
+        enforceBrightnessOrder(type);
       
         // Повідомляємо mDNS про зміни налаштувань
         mdnsService.onSettingsChange(type, intValue, fltValue, strValue);
@@ -2150,6 +2364,10 @@ void initSettings() {
             case BRIGHTNESS_DAY:
             case BRIGHTNESS_NIGHT:
             case BRIGHTNESS_MODE:
+            case BRIGHTNESS_SMOOTH_MAX:        // [lux]
+            case BRIGHTNESS_SMOOTH_MIN_DAY:    // [lux]
+            case BRIGHTNESS_SMOOTH_MIN_NIGHT:  // [lux]
+            case LIGHT_SENSOR_FACTOR:          // [lux]
             // Додатково перераховуємо CURRENT_BRIGHTNESS
                 brightnessProcess();
             case DAY_START:
@@ -2173,12 +2391,20 @@ void initSettings() {
             case BIND_BG_BRIGHTNESS:
             case BRIGHTNESS_ANIMATION_END:
             case BRIGHTNESS_LAMP:
+            case BIND_LAMP_BRIGHTNESS:
             case BRIGHTNESS_SERVICE:
                 adaptStripColorsAndBrightness();
                 handleAdaptAnimationColors();
                 handleAdaptAnimationBrightness();
                 break;
             
+            // [lux] Яскравість дисплея
+            case DISPLAY_BRIGHTNESS:
+            case DISPLAY_AUTO_BRIGHTNESS:
+            case DISPLAY_BRIGHTNESS_MIN:
+                displayBrightnessProcess();
+                break;
+
             // Час анімацій
             case ANIMATION_ALERT_ON_CYCLE_TIME:
             case ANIMATION_ALERT_OFF_CYCLE_TIME:
@@ -2354,7 +2580,7 @@ void initSettings() {
             // Зміна каналу оновлення прошивки — перераховуємо стан з уже отриманих списків
             case NEW_FW_NOTIFICATION:
             case FW_UPDATE_CHANNEL:
-                fwUpdate.applyActiveChannel(settings.getInt(FW_UPDATE_CHANNEL) == 1);
+                fwUpdate.applyActiveChannel(settings.getInt(FW_UPDATE_CHANNEL));
                 break;
 
             default:
@@ -2540,6 +2766,13 @@ void initTime() {
 }
 
 void initMDNS() {
+    // Повторний begin() при кожному поверненні Wi-Fi гонить з внутрішнім probe mDNS (пошкодження купи); ESP-IDF сам перезапускає mDNS на новий IP
+    static bool mdnsInitialized = false;
+    if (mdnsInitialized) {
+        LOG.printf("[INIT] mDNS already initialized, skipping...\n");
+        return;
+    }
+    mdnsInitialized = true;
     LOG.printf("[INIT] Init mDNS\n");
     mdnsService.setSettings(&settings);
     mdnsService.setDeviceInfo(chipID, fwUpdate.getCurrentVersion());
@@ -2864,50 +3097,79 @@ void checkMinuteOfSilence()
     }
 }
 
+// Очищає мапу й запускає RUNNING_LIGHT до першого пакета даних після підключення (знімає wsClearLostAnim).
+// Сервер недоступний: червоний вогник на тьмяно-зеленому; Wi-Fi недоступний: бурштиновий на тьмяно-синьому.
+void showConnectionLost(bool wifiLost) {
+    websocketReconnect = true;
+    wsLostShown = true;
+    wsLostWifi = wifiLost;
+    wsClearLostAnim = false;
+    if (wifiLost) wsConnectedAt = 0; // час без Wi-Fi не рахується як тривалість з'єднання
+    clearAllAlertsMaps();
+    clearAllWeatherMaps();
+    clearAllEnergyMaps();
+    clearAllRadiationMaps();
+    isFirstDataFetchCompleted = false;
+    animation.clearAllAnimations();
+    animation.createAnimation(
+        AnimationTypes::RUNNING_LIGHT,
+        strip_main,
+        MapModes::ALERT,
+        {}, // not used in RUNNING_LIGHT
+        0,
+        wifiLost ? 0xFF8000 : 0xFF0000,
+        wifiLost ? 0x000040 : 0x004000, // тьмяний фон (~25%), щоб вогник читався; обидва множаться на яскравість мапи
+        2000, // період одного кола, мс
+        UINT32_MAX, // до першого пакета даних
+        50,
+        led.brightnessRelative(100) // поточна яскравість мапи
+    );
+}
+
 void websocketProcess() {
+    static bool wifiWasDown = false;
+    static uint32_t wifiDownAt = 0;
+    static uint32_t wifiBackAt = 0;
+    static bool wifiBackValid = false; // wifiBackAt чинний лише до першого вдалого підключення до сервера
     if (!wifi.isConnected()) {
         LOG.printf("[WEBSOCKET] Reconnecting... WiFi not connected\n");
+        if (!wifiWasDown) { wifiWasDown = true; wifiDownAt = millis(); }
+        // як і для сервера: перші WS_LOST_AFTER_MS тихо, щоб швидкий реконект лишився непомітним
+        if ((!wsLostShown || !wsLostWifi) && millis() - wifiDownAt > WS_LOST_AFTER_MS) showConnectionLost(true);
         return;
     }
+    fwUpdate.processCustomChannel(true);  // [rsa_lux] перевірка маніфесту неофіційного каналу
+    if (wifiWasDown) { wifiWasDown = false; wifiBackAt = millis(); wifiBackValid = true; }
     //if (millis() - websocketLastPingTime > 30000 && !websocketReconnect) {
-    if (millis() - websocketLastPingTime > settings.getInt(WS_ALERT_TIME) && !websocketReconnect) {
-        LOG.printf("[WEBSOCKET] websocketReconnect = true; Reason: no ping/pong from server (WS_ALERT_TIME)\n");
-        websocketReconnect = true;
-        clearAllAlertsMaps();
-        clearAllWeatherMaps();
-        clearAllEnergyMaps();
-        clearAllRadiationMaps();
-        isFirstDataFetchCompleted = false;
-        animation.clearAllAnimations();
-        //int positions[] = {}; // not used in RUNNING_LIGHT
-        animation.createAnimation(
-            AnimationTypes::RUNNING_LIGHT,
-            strip_main,  
-            MapModes::ALERT,       
-            {}, // not used in RUNNING_LIGHT        
-            0,            
-            0xFF0000,      
-            0x001100,        
-            1000,
-            180,
-            50,
-            200
-        );
+    bool connected = websocket.available(); // може сам викликати ConnectionClosed і запланувати затримку
+    uint32_t silentMs = millis() - websocketLastPingTime;
+    // нема з'єднання WS_LOST_AFTER_MS, або з'єднання "висить" без пінгів WS_ALERT_TIME
+    // тиша без з'єднання рахується від повернення Wi-Fi, якщо той був відсутній менше WS_LOST_AFTER_MS (інакше вже показано)
+    if (connected) wifiBackValid = false;
+    uint32_t sinceWifi = millis() - wifiBackAt;
+    uint32_t sinceRef = (wifiBackValid && sinceWifi < silentMs) ? sinceWifi : silentMs;
+    bool lost = silentMs > settings.getInt(WS_ALERT_TIME) || (!connected && sinceRef > WS_LOST_AFTER_MS);
+    if (lost && !wsLostShown) {
+        LOG.printf("[WEBSOCKET] websocketReconnect = true; Reason: %s\n",
+                   connected ? "no ping/pong from server (WS_ALERT_TIME)" : "no connection for WS_LOST_AFTER_MS");
+        showConnectionLost(false);
     }
-    //if (millis() - websocketLastPingTime > 40000 && websocketReconnect) {
-    if (millis() - websocketLastPingTime > settings.getInt(WS_REBOOT_TIME) && websocketReconnect) {
+    // backoff: до wsNextConnectAt нову спробу не робимо, але reboot-watchdog нижче перевіряється завжди
+    if (!wsBackoffActive || (int32_t)(millis() - wsNextConnectAt) >= 0) {
+        wsBackoffActive = false;
+        if (!connected || websocketReconnect) {
+            LOG.printf("[WEBSOCKET] Reconnecting... %s\n", !connected ? "websocket.available() == false" : "websocketReconnect == true");
+            websocketConnected = false;
+            socketConnect();
+        }
+    }
+    // Wi-Fi повернувся, а спроба підключення до сервера не вдалася (або ще не настав її час): "сервер недоступний".
+    // Вдала спроба вже зняла wsLostShown, тож червоного спалаху перед підключенням немає.
+    if (wsLostShown && wsLostWifi) showConnectionLost(false);
+    // Вдала спроба скидає websocketReconnect, тож reboot лише якщо тиша триває попри спроби
+    if ((uint32_t)(millis() - websocketLastPingTime) > (uint32_t)settings.getInt(WS_REBOOT_TIME) && websocketReconnect) {
         LOG.printf("[WEBSOCKET] websocketReconnect = true; Reason: WS_REBOOT_TIME exceeded, will reboot\n");
         rebootDevice(3000, true);
-    }
-    if (!websocket.available()) {
-        LOG.printf("[WEBSOCKET] Reconnecting... websocket.available() == false\n");
-        websocketConnected = false;
-        socketConnect();
-    }
-    if (websocketReconnect) {
-        LOG.printf("[WEBSOCKET] Reconnecting... websocketReconnect == true\n");
-        websocketConnected = false;
-        socketConnect();
     }
 }
 
@@ -3129,7 +3391,7 @@ void reconfigureAll() {
     handleUpdateHomeAlertBit();
     
     // Оновлення каналу прошивки
-    fwUpdate.applyActiveChannel(settings.getInt(FW_UPDATE_CHANNEL) == 1);
+    fwUpdate.applyActiveChannel(settings.getInt(FW_UPDATE_CHANNEL));
     
     // Оновлення режиму логування
     loggingStream.setLogsEnabled(settings.getBool(LOGS_ENABLED));
@@ -3177,6 +3439,14 @@ void handleUpdateHomeAlertBit() {
                           ? temperatureFlat[homeTempIdx] : 0x00;
     int homeTemp = decodeTemperature(encodedTemp);
     api.setHomeDistrictTemp(homeTemp);
+    updateHomeEnergyRadiation(); // [lux3]
+}
+
+// [lux3] Стан енергосистеми і рівень радіації домашнього регіону -> Home Assistant
+void updateHomeEnergyRadiation() {
+    int idx = getRegionFlatIdx(settings.getInt(HOME_DISTRICT));
+    bool valid = idx >= 0 && idx < (int)(MAX_REGIONS + 1);
+    api.setHomeEnergyRadiation(valid ? energyFlat[idx] : 0, valid ? radiationFlat[idx] : 0);
 }
 
 void handleUpdateTimezone() {
@@ -3190,18 +3460,29 @@ void handleUpdateNtpHost() {
     syncTime(3);
 }
 
-void handleReconnectWebsocket() {
+void handleReconnectWebsocket(bool resetBackoff) {
     LOG.printf("[SETTINGS] WebSocket server settings changed, reconnecting...\n");
     websocketConnected = false;
     websocketReconnect = true;
-    clearAllAlertsMaps();
-    clearAllWeatherMaps();
-    clearAllEnergyMaps();
-    clearAllRadiationMaps();
-    isFirstDataFetchCompleted = false;
+    if (resetBackoff) { // зміна сервера: чужі дані не показуємо; помилка протоколу лишає мапу, новий сеанс почнеться з повного стану
+        clearAllAlertsMaps();
+        clearAllWeatherMaps();
+        clearAllEnergyMaps();
+        clearAllRadiationMaps();
+        isFirstDataFetchCompleted = false;
+    }
     alertsHash = 0;
     if (websocket.available()) {
+        wsManualReconnect = true;
         websocket.close();
+        wsManualReconnect = false; // подія закриття вже спрацювала синхронно; прапор не має пережити close()
+    }
+    // після close(): якщо available() сам виявив обрив, його подія вже порахована і тут перекривається
+    if (resetBackoff) {
+        wsAttempt = 0;
+        wsConnectedAt = 0;
+        wsReconnectDelayMs = WS_RECONNECT_MIN_MS;
+        wsBackoffActive = false;
     }
 }
 
@@ -3226,7 +3507,9 @@ void requestPlayTestTrack(int trackId) {
 
 void requestWebsocketReconnect() {
     LOG.printf("[WEBSOCKET] Reconnection requested\n");
-    handleReconnectWebsocket();
+    // запит від протоколу (розрив hash-ланцюга, биті дані) іде через backoff, щоб не було швидкого циклу
+    handleReconnectWebsocket(false);
+    if (wsConnectedAt != 0) scheduleReconnect(false); // без з'єднання затримка вже запланована, не нарощуємо
 }
 
 void updateFirmware() {
@@ -3246,8 +3529,8 @@ void requestFirmwareUpdate(const char* firmwareId) {
     }
     
     // Встановлюємо ID прошивки для завантаження
-    bool isBeta = settings.getInt(FW_UPDATE_CHANNEL) == 1;
-    if (!fwUpdate.requestUpdate(versionToUse, isBeta)) {
+    int channel = settings.getInt(FW_UPDATE_CHANNEL);
+    if (!fwUpdate.requestUpdate(versionToUse, channel)) {
         LOG.printf("[FIRMWARE] Invalid firmware ID: %s\n", versionToUse);
         return;
     }
@@ -3280,12 +3563,16 @@ void brightnessProcess() {
     // if auto brightness set to day/night mode, check current hour and choose brightness
     uint8_t currentBrightness = getCurrentBrightnes();
     if (settings.getInt(CURRENT_BRIGHTNESS) != currentBrightness) {
-        settings.saveInt(CURRENT_BRIGHTNESS, currentBrightness);
+        // [lux] у плавному режимі яскравість змінюється часто - тримаємо лише в RAM, щоб не зношувати флеш (NVS)
+        settings.saveInt(CURRENT_BRIGHTNESS, currentBrightness, !isSmoothBrightnessActive());
         LOG.printf("[BRIGHTNESS] Setting current_brightness to %d\n", currentBrightness);
         adaptStripColorsAndBrightness();     
         handleAdaptAnimationColors();
         handleAdaptAnimationBrightness();
     }
+    // [lux] яскравість дисплея і поточний стан для Home Assistant
+    displayBrightnessProcess();
+    api.setBrightnessState(settings.getInt(CURRENT_BRIGHTNESS), currentDisplayBrightness);
 }
 
 // --- Battery Monitor Process ---
@@ -3481,7 +3768,10 @@ void displayProcess()
     }
 
     // Turn off display at night if setting enabled (Priority - highest)
-    if (settings.getBool(DISPLAY_OFF_AT_NIGHT) && isItNightNow() && !display.isServiceMessageActive()) {
+    // [lux] Режим мапи "Лампа" вмикає дисплей, вимкнений вночі за часом; після виходу з режиму лампи
+    // умова знову виконується, і дисплей гаситься сам. Ручне вимкнення дисплея (isDisplayOff) лампа не чіпає
+    bool lampKeepsDisplayOn = getCurrentMapMode() == MapModes::LAMP;
+    if (settings.getBool(DISPLAY_OFF_AT_NIGHT) && isItNightNow() && !lampKeepsDisplayOn && !display.isServiceMessageActive()) {
         display.clear();
         return;
     }
@@ -3496,7 +3786,24 @@ void displayProcess()
         showMinOfSilenceScreen(1);
         return;
     }
-    // Show firmware update notification if available (Priority - 2)
+    // Show lost server connection (Priority - 2): інакше екран показує застарілі дані
+    if (wsLostShown) {
+        if (wsLostWifi) {
+            uint32_t inMs = wifi.reconnectInMs();
+            display.printMultilineMessage("перепідключення",
+                String("спроба ") + wifi.reconnectAttempt() + "/" + wifi.reconnectMax(),
+                inMs ? String("наступна через ") + (inMs + 999) / 1000 + " с" : String("підключення..."),
+                "", "Wi-Fi");
+        } else {
+            int32_t inMs = wsBackoffActive ? (int32_t)(wsNextConnectAt - millis()) : 0;
+            display.printMultilineMessage("перепідключення",
+                String("спроба ") + (wsAttempt + 1),
+                inMs > 0 ? String("наступна через ") + (inMs + 999) / 1000 + " с" : String("підключення..."),
+                "", "Сервер даних");
+        }
+        return;
+    }
+    // Show firmware update notification if available (Priority - 3)
     if (fwUpdate.isUpdateAvailable() && settings.getBool(NEW_FW_NOTIFICATION)) {
         showNewFirmwareNotification();
         return;
@@ -3586,6 +3893,12 @@ void rebuildSensorsListItems() {
         bool sensorAvailable = lightSensor.isAnySensorAvailable();
         lightSensorOption->ignore = !sensorAvailable;
         lightSensorOption->showDisabled = !sensorAvailable;
+    }
+    SettingListItem* autoBrightnessOption = getSettingItemById(AUTO_BRIGHTNESS_MODES, AUTO_BRIGHTNESS_OPTIONS_COUNT, 3); // [lux] Автояскравість
+    if (autoBrightnessOption != nullptr) {
+        bool sensorAvailable = lightSensor.isLightSensorAvailable();
+        autoBrightnessOption->ignore = !sensorAvailable;
+        autoBrightnessOption->showDisabled = !sensorAvailable;
     }
     SettingListItem* climateSensorOption = getSettingItemById(DISPLAY_MODES, DISPLAY_MODES_COUNT, 4); // Мікроклімат
     if (climateSensorOption != nullptr) {

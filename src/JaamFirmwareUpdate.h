@@ -12,7 +12,13 @@ struct JaamFirmware {
     int minor = 0;
     int patch = 0;
     int beta = 0;
+    int lux = 0;   // [rsa_lux] номер неофіційної збірки (суфікс "-luxN"), 0 для офіційних
 };
+
+// Канали оновлення (налаштування FW_UPDATE_CHANNEL)
+static constexpr int FW_CHANNEL_PROD = 0;
+static constexpr int FW_CHANNEL_BETA = 1;
+static constexpr int FW_CHANNEL_RSA_LUX = 2;   // [rsa_lux] неофіційний канал: маніфест і прошивки з GitHub Rsa76d
 
 class JaamFirmwareUpdate {
 public:
@@ -29,12 +35,16 @@ public:
     // Оновлює спільний стан і сповіщає API лише якщо isBeta збігається з активним каналом (_activeIsBeta).
     void processBatch(const uint8_t* data, size_t bodyLen, bool isBeta);
 
-    bool requestUpdate(const char* id, bool isBeta);
-    void applyActiveChannel(bool isBeta);
+    bool requestUpdate(const char* id, int channel);
+    void applyActiveChannel(int channel);
+
+    // [rsa_lux] Перевірка маніфесту неофіційного каналу (викликається періодично з основного циклу)
+    void processCustomChannel(bool wifiConnected);
+    const char* getCustomVersion() const;
     bool isUpdateRequested() const;
     void clearUpdateRequest();
     void download();
-    bool isValidFirmwareId(const char* id, bool isBeta) const;
+    bool isValidFirmwareId(const char* id, int channel) const;
 
     bool isUpdateAvailable() const;
     const char* getCurrentVersion() const;
@@ -51,7 +61,15 @@ private:
     bool _fwUpdateAvailable = false;
     volatile bool _needUpdate = false;
     static constexpr size_t MAX_FW = 10;
-    bool _activeIsBeta = false;
+    int _activeChannel = FW_CHANNEL_PROD;
+
+    // [rsa_lux] стан неофіційного каналу
+    char _customVersion[25] = {};
+    char _customUrl[200] = {};
+    uint32_t _customLastCheck = 0;
+    bool _customCheckPending = true;
+    bool fetchCustomManifest();
+    void applyCustomState();
     JaamFirmware _firmwares_beta[MAX_FW] = {};
     JaamFirmware _firmwares_prod[MAX_FW] = {};
     JaamFirmware _firmware = {};
